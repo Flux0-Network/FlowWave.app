@@ -42,7 +42,7 @@ const marketplaceCogs: MarketplaceCog[] = [
     id: "welcome-pro",
     name: "Welcome Pro",
     description: "Vollständiges Willkommenssystem mit Rollen-Auswahl, DM-Begrüßung und Captcha-Verifikation.",
-    author: "Flowcord",
+    author: "FlowWave",
     category: "utility",
     downloads: 1247,
     likes: 89,
@@ -55,7 +55,7 @@ const marketplaceCogs: MarketplaceCog[] = [
     id: "ticket-system",
     name: "Ticket System",
     description: "Support-Tickets mit Kategorien, Transkripten und automatischem Archiv.",
-    author: "Flowcord",
+    author: "FlowWave",
     category: "moderation",
     downloads: 2341,
     likes: 156,
@@ -116,7 +116,7 @@ const marketplaceCogs: MarketplaceCog[] = [
     id: "announcer",
     name: "Smart Announcer",
     description: "Geplante Ankündigungen mit Embeds, Mentions und Wiederholungen.",
-    author: "Flowcord",
+    author: "FlowWave",
     category: "utility",
     downloads: 567,
     likes: 45,
@@ -162,7 +162,7 @@ export default function MarketplacePage() {
   const featured = marketplaceCogs.filter((c) => c.featured);
 
   return (
-    <div className="container px-4 py-8 max-w-6xl">
+    <div className="py-8 max-w-6xl mx-auto">
       <div className="mb-8">
         <h1 className="text-3xl font-bold mb-2">Cog Marketplace</h1>
         <p className="text-muted-foreground">

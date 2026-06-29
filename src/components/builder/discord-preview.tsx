@@ -20,7 +20,7 @@ export function DiscordPreview({ components, selectedId, onSelect }: DiscordPrev
         <div className="min-w-0 flex-1">
           {/* Bot name */}
           <div className="flex items-center gap-2 mb-1">
-            <span className="text-sm font-medium text-white">Flowcord Bot</span>
+            <span className="text-sm font-medium text-white">FlowWave Bot</span>
             <span className="rounded bg-[#5865F2] px-1 py-0.5 text-[10px] font-medium text-white">
               BOT
             </span>

@@ -14,7 +14,7 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Flowcord — Visual Pycord Builder",
+  title: "FlowWave — Visual Pycord Builder",
   description:
     "Klick dir Discord-Bots zusammen. Components V2 Visual Builder und Pycord Cog Generator mit Live-Preview und Code-Export.",
 };

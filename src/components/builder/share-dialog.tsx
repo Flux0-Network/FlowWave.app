@@ -48,7 +48,7 @@ export function ShareDialog({ open, onOpenChange, components }: ShareDialogProps
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "flowcord-layout.json";
+    a.download = "flowwave-layout.json";
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -57,7 +57,7 @@ export function ShareDialog({ open, onOpenChange, components }: ShareDialogProps
     try {
       const parsed = JSON.parse(importJson);
       if (Array.isArray(parsed)) {
-        const event = new CustomEvent("flowcord:import", { detail: parsed });
+        const event = new CustomEvent("flowwave:import", { detail: parsed });
         window.dispatchEvent(event);
         onOpenChange(false);
       }

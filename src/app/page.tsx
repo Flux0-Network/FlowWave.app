@@ -9,12 +9,12 @@ export default function LandingPage() {
   return (
     <div className="flex flex-col min-h-screen">
       <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur">
-        <div className="container flex h-14 items-center px-4">
+        <div className="container mx-auto flex h-14 items-center px-4">
           <Link href="/" className="flex items-center gap-2 font-bold text-lg">
             <div className="size-8 rounded-lg bg-primary flex items-center justify-center">
               <Cog className="size-5 text-primary-foreground" />
             </div>
-            <span>Flowcord</span>
+            <span>FlowWave</span>
           </Link>
           <div className="ml-auto flex items-center gap-2">
             <Link href="/builder" className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}>
@@ -31,7 +31,7 @@ export default function LandingPage() {
       </header>
 
       <main className="flex-1">
-        <section className="container px-4 py-24 md:py-32 flex flex-col items-center text-center gap-8">
+        <section className="container mx-auto px-4 py-24 md:py-32 flex flex-col items-center text-center gap-8">
           <Badge variant="secondary" className="gap-1">
             <Sparkles className="size-3" />
             Discord Components V2 &amp; Pycord
@@ -61,7 +61,7 @@ export default function LandingPage() {
           </div>
         </section>
 
-        <section className="container px-4 py-16 grid md:grid-cols-3 gap-6">
+        <section className="container mx-auto px-4 py-16 grid md:grid-cols-3 gap-6">
           <Card>
             <CardHeader>
               <div className="size-10 rounded-lg bg-primary/10 flex items-center justify-center mb-2">
@@ -95,14 +95,14 @@ export default function LandingPage() {
               </div>
               <CardTitle>Kein Lock-in</CardTitle>
               <CardDescription>
-                Export als .py-Datei. Du programmierst normal weiter — Flowcord ist
+                Export als .py-Datei. Du programmierst normal weiter — FlowWave ist
                 der Startpunkt, nicht das Gefängnis.
               </CardDescription>
             </CardHeader>
           </Card>
         </section>
 
-        <section className="container px-4 py-16">
+        <section className="container mx-auto px-4 py-16">
           <h2 className="text-3xl font-bold text-center mb-12">So funktioniert&apos;s</h2>
           <div className="grid md:grid-cols-3 gap-8">
             {[
@@ -138,10 +138,10 @@ export default function LandingPage() {
       </main>
 
       <footer className="border-t py-8">
-        <div className="container px-4 flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-muted-foreground">
+        <div className="container mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-muted-foreground">
           <div className="flex items-center gap-2">
             <Cog className="size-4" />
-            <span>Flowcord</span>
+            <span>FlowWave</span>
           </div>
           <p>Gebaut für die Discord-Bot-Community.</p>
         </div>
