@@ -6,7 +6,8 @@ export type ComponentType =
   | "separator"
   | "thumbnail"
   | "media-gallery"
-  | "action-row";
+  | "action-row"
+  | "select-menu";
 
 export type ButtonStyle = "primary" | "secondary" | "success" | "danger" | "link";
 
@@ -56,6 +57,26 @@ export interface MediaGalleryProps {
 
 export interface ActionRowProps {
   // action rows only hold children (buttons, selects)
+}
+
+export type SelectMenuType = "string" | "user" | "role" | "mentionable" | "channel";
+
+export interface SelectMenuOption {
+  label: string;
+  value: string;
+  description?: string;
+  emoji?: string;
+  default?: boolean;
+}
+
+export interface SelectMenuProps {
+  select_type: SelectMenuType;
+  custom_id: string;
+  placeholder?: string;
+  min_values?: number;
+  max_values?: number;
+  options?: SelectMenuOption[];
+  disabled?: boolean;
 }
 
 export interface BuilderState {

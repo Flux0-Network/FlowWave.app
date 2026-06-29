@@ -4,6 +4,8 @@ import { useMemo, useState } from "react";
 import { CommandBuilder } from "@/components/generator/command-builder";
 import { ModalBuilder } from "@/components/generator/modal-builder";
 import { SqliteBuilder } from "@/components/generator/sqlite-builder";
+import { EventListenerBuilder } from "@/components/generator/event-listener-builder";
+import { AutocompleteBuilder, type AutocompleteConfig } from "@/components/generator/autocomplete-builder";
 import { CodeOutput } from "@/components/builder/code-output";
 import { generateCogCode } from "@/lib/codegen/cog-generator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -20,12 +22,15 @@ export default function GeneratorPage() {
     tables: [],
     listeners: [],
   });
+  const [autocompleteConfigs, setAutocompleteConfigs] = useState<AutocompleteConfig[]>([]);
 
-  const code = useMemo(() => generateCogCode(config), [config]);
+  const code = useMemo(
+    () => generateCogCode(config, autocompleteConfigs),
+    [config, autocompleteConfigs]
+  );
 
   return (
     <div className="flex flex-col h-[calc(100vh-3.5rem)]">
-      {/* Toolbar */}
       <div className="flex items-center gap-4 border-b px-4 py-2">
         <h1 className="text-lg font-semibold">Cog Generator</h1>
         <div className="flex items-center gap-2">
@@ -46,22 +51,16 @@ export default function GeneratorPage() {
         </div>
       </div>
 
-      {/* Main layout */}
       <div className="flex-1 grid grid-cols-[1fr_1fr] gap-0 overflow-hidden">
-        {/* Left: Config */}
         <ScrollArea className="border-r">
           <div className="p-4">
             <Tabs defaultValue="commands">
               <TabsList className="w-full">
-                <TabsTrigger value="commands" className="flex-1">
-                  Commands
-                </TabsTrigger>
-                <TabsTrigger value="modals" className="flex-1">
-                  Modals
-                </TabsTrigger>
-                <TabsTrigger value="sqlite" className="flex-1">
-                  SQLite
-                </TabsTrigger>
+                <TabsTrigger value="commands" className="flex-1">Commands</TabsTrigger>
+                <TabsTrigger value="modals" className="flex-1">Modals</TabsTrigger>
+                <TabsTrigger value="sqlite" className="flex-1">SQLite</TabsTrigger>
+                <TabsTrigger value="events" className="flex-1">Events</TabsTrigger>
+                <TabsTrigger value="autocomplete" className="flex-1">Auto</TabsTrigger>
               </TabsList>
               <TabsContent value="commands" className="mt-4">
                 <CommandBuilder
@@ -81,11 +80,23 @@ export default function GeneratorPage() {
                   onChange={(tables) => setConfig({ ...config, tables })}
                 />
               </TabsContent>
+              <TabsContent value="events" className="mt-4">
+                <EventListenerBuilder
+                  listeners={config.listeners}
+                  onChange={(listeners) => setConfig({ ...config, listeners })}
+                />
+              </TabsContent>
+              <TabsContent value="autocomplete" className="mt-4">
+                <AutocompleteBuilder
+                  configs={autocompleteConfigs}
+                  commands={config.commands}
+                  onChange={setAutocompleteConfigs}
+                />
+              </TabsContent>
             </Tabs>
           </div>
         </ScrollArea>
 
-        {/* Right: Code output */}
         <div className="overflow-y-auto p-4">
           <CodeOutput code={code} />
         </div>

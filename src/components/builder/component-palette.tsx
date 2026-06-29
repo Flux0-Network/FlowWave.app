@@ -9,6 +9,7 @@ import {
   Image,
   Images,
   Rows3,
+  List,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { ComponentType } from "@/types/builder";
@@ -68,6 +69,12 @@ const paletteItems: PaletteItem[] = [
     label: "Action Row",
     icon: Rows3,
     description: "Reihe für Buttons und Select-Menüs",
+  },
+  {
+    type: "select-menu",
+    label: "Select Menu",
+    icon: List,
+    description: "Dropdown: String, User, Role, Channel oder Mentionable",
   },
 ];
 

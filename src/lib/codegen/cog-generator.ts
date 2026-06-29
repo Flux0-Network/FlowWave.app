@@ -1,6 +1,7 @@
-import type { CogConfig, SlashCommand, Modal, SqliteTable } from "@/types/generator";
+import type { CogConfig, SlashCommand, Modal, SqliteTable, EventListener } from "@/types/generator";
+import type { AutocompleteConfig } from "@/components/generator/autocomplete-builder";
 
-export function generateCogCode(config: CogConfig): string {
+export function generateCogCode(config: CogConfig, autocompleteConfigs?: AutocompleteConfig[]): string {
   const lines: string[] = [];
 
   lines.push("import discord");
@@ -14,14 +15,12 @@ export function generateCogCode(config: CogConfig): string {
   lines.push("");
   lines.push("");
 
-  // Modal classes
   for (const modal of config.modals) {
     lines.push(...generateModalClass(modal));
     lines.push("");
     lines.push("");
   }
 
-  // Cog class
   lines.push(`class ${config.cogName}(commands.Cog):`);
   lines.push(`    def __init__(self, bot: commands.Bot):`);
   lines.push(`        self.bot = bot`);
@@ -33,7 +32,6 @@ export function generateCogCode(config: CogConfig): string {
 
   lines.push("");
 
-  // SQLite table creation
   if (config.tables.length > 0) {
     lines.push(`    def _create_tables(self):`);
     for (const table of config.tables) {
@@ -43,24 +41,27 @@ export function generateCogCode(config: CogConfig): string {
     lines.push("");
   }
 
-  // Slash commands
   for (const cmd of config.commands) {
     lines.push(...generateSlashCommand(cmd, config));
     lines.push("");
   }
 
-  // Interaction listeners
-  for (const listener of config.listeners) {
-    lines.push(`    @commands.Cog.listener()`);
-    lines.push(`    async def on_interaction(self, interaction: discord.Interaction):`);
-    if (listener.customIdPattern) {
-      lines.push(`        if interaction.custom_id == ${JSON.stringify(listener.customIdPattern)}:`);
-      lines.push(`            await interaction.response.send_message("Handled!", ephemeral=True)`);
+  // Autocomplete handlers
+  if (autocompleteConfigs && autocompleteConfigs.length > 0) {
+    for (const ac of autocompleteConfigs) {
+      const cmd = config.commands.find((c) => c.id === ac.commandId);
+      if (!cmd) continue;
+      lines.push(...generateAutocomplete(ac, cmd, config));
+      lines.push("");
     }
+  }
+
+  // Event listeners
+  for (const listener of config.listeners) {
+    lines.push(...generateEventListener(listener));
     lines.push("");
   }
 
-  // Setup function
   lines.push("");
   lines.push(`def setup(bot: commands.Bot):`);
   lines.push(`    bot.add_cog(${config.cogName}(bot))`);
@@ -111,26 +112,15 @@ function generateModalClass(modal: Modal): string[] {
 function generateSlashCommand(cmd: SlashCommand, config: CogConfig): string[] {
   const lines: string[] = [];
 
-  // Decorator
-  let decorator = `    @discord.slash_command(name=${JSON.stringify(cmd.name)}, description=${JSON.stringify(cmd.description)})`;
-  lines.push(decorator);
+  lines.push(`    @discord.slash_command(name=${JSON.stringify(cmd.name)}, description=${JSON.stringify(cmd.description)})`);
 
-  // Function signature
   const params = ["self", "ctx: discord.ApplicationContext"];
   for (const opt of cmd.options) {
     const optType = getOptionType(opt.type);
-    params.push(
-      `${opt.name}: ${optType}`
-    );
+    params.push(`${opt.name}: ${optType}`);
   }
   lines.push(`    async def ${cmd.name}(${params.join(", ")}):`);
 
-  // Options with descriptions
-  for (const opt of cmd.options) {
-    // We'll use discord.Option for proper description/choices
-  }
-
-  // Body
   if (cmd.hasModal && cmd.modalId) {
     const modal = config.modals.find((m) => m.id === cmd.modalId);
     if (modal) {
@@ -145,6 +135,151 @@ function generateSlashCommand(cmd: SlashCommand, config: CogConfig): string[] {
     lines.push(`        await ctx.respond(f"Found {len(rows)} entries.", ephemeral=True)`);
   } else {
     lines.push(`        await ctx.respond("Command ${cmd.name} ausgeführt!", ephemeral=True)`);
+  }
+
+  return lines;
+}
+
+function generateAutocomplete(ac: AutocompleteConfig, cmd: SlashCommand, config: CogConfig): string[] {
+  const lines: string[] = [];
+  const fnName = `${cmd.name}_${ac.optionName}_autocomplete`;
+
+  lines.push(`    @${cmd.name}.autocomplete(${JSON.stringify(ac.optionName)})`);
+  lines.push(`    async def ${fnName}(self, ctx: discord.AutocompleteContext):`);
+  lines.push(`        value = ctx.value.lower() if ctx.value else ""`);
+
+  if (ac.source === "static") {
+    lines.push(`        choices = [`);
+    for (const choice of ac.staticChoices || []) {
+      lines.push(`            discord.OptionChoice(name=${JSON.stringify(choice.name)}, value=${JSON.stringify(choice.value)}),`);
+    }
+    lines.push(`        ]`);
+    lines.push(`        return [c for c in choices if value in c.name.lower()][:25]`);
+  } else if (ac.source === "database") {
+    const table = ac.dbTable || config.tables[0]?.name || "table";
+    const column = ac.dbColumn || "name";
+    lines.push(`        cursor = self.db.execute(`);
+    lines.push(`            "SELECT ${column} FROM ${table} WHERE LOWER(${column}) LIKE ?",`);
+    lines.push(`            (f"%{value}%",)`);
+    lines.push(`        )`);
+    lines.push(`        rows = cursor.fetchall()`);
+    lines.push(`        return [`);
+    lines.push(`            discord.OptionChoice(name=row[0], value=row[0])`);
+    lines.push(`            for row in rows[:25]`);
+    lines.push(`        ]`);
+  } else {
+    lines.push(`        # TODO: Implement API call for autocomplete`);
+    lines.push(`        return []`);
+  }
+
+  return lines;
+}
+
+function generateEventListener(listener: EventListener): string[] {
+  const lines: string[] = [];
+  const eventHandlers: Record<string, { params: string; body: string[] }> = {
+    on_message: {
+      params: "self, message: discord.Message",
+      body: [
+        "        if message.author.bot:",
+        "            return",
+        '        # Deine Logik hier',
+      ],
+    },
+    on_member_join: {
+      params: "self, member: discord.Member",
+      body: [
+        '        # Willkommensnachricht senden',
+        '        channel = member.guild.system_channel',
+        '        if channel:',
+        '            await channel.send(f"Willkommen {member.mention}!")',
+      ],
+    },
+    on_member_remove: {
+      params: "self, member: discord.Member",
+      body: [
+        '        # Verabschiedung',
+        '        channel = member.guild.system_channel',
+        '        if channel:',
+        '            await channel.send(f"{member.name} hat den Server verlassen.")',
+      ],
+    },
+    on_reaction_add: {
+      params: "self, reaction: discord.Reaction, user: discord.User",
+      body: [
+        "        if user.bot:",
+        "            return",
+        '        # Reaktions-Logik hier',
+      ],
+    },
+    on_reaction_remove: {
+      params: "self, reaction: discord.Reaction, user: discord.User",
+      body: [
+        '        # Reaktion entfernt',
+      ],
+    },
+    on_voice_state_update: {
+      params: "self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState",
+      body: [
+        '        # Voice-State Änderung',
+      ],
+    },
+    on_interaction: {
+      params: "self, interaction: discord.Interaction",
+      body: [],
+    },
+    on_message_delete: {
+      params: "self, message: discord.Message",
+      body: ['        # Nachricht gelöscht — z.B. loggen'],
+    },
+    on_message_edit: {
+      params: "self, before: discord.Message, after: discord.Message",
+      body: ['        # Nachricht bearbeitet'],
+    },
+    on_guild_channel_create: {
+      params: "self, channel: discord.abc.GuildChannel",
+      body: ['        # Neuer Channel erstellt'],
+    },
+    on_guild_channel_delete: {
+      params: "self, channel: discord.abc.GuildChannel",
+      body: ['        # Channel gelöscht'],
+    },
+    on_guild_role_create: {
+      params: "self, role: discord.Role",
+      body: ['        # Neue Rolle erstellt'],
+    },
+    on_guild_role_delete: {
+      params: "self, role: discord.Role",
+      body: ['        # Rolle gelöscht'],
+    },
+    on_invite_create: {
+      params: "self, invite: discord.Invite",
+      body: ['        # Einladung erstellt'],
+    },
+    on_thread_create: {
+      params: "self, thread: discord.Thread",
+      body: ['        # Thread erstellt'],
+    },
+  };
+
+  const handler = eventHandlers[listener.event];
+  if (!handler) return lines;
+
+  lines.push(`    @commands.Cog.listener()`);
+  lines.push(`    async def ${listener.event}(${handler.params}):`);
+
+  if (listener.event === "on_interaction" && listener.customIdPattern) {
+    const pattern = listener.customIdPattern;
+    if (pattern.includes("*")) {
+      const prefix = pattern.replace("*", "");
+      lines.push(`        if not interaction.custom_id or not interaction.custom_id.startswith(${JSON.stringify(prefix)}):`);
+    } else {
+      lines.push(`        if not interaction.custom_id or interaction.custom_id != ${JSON.stringify(pattern)}:`);
+    }
+    lines.push(`            return`);
+    lines.push(`        await interaction.response.send_message("Handled!", ephemeral=True)`);
+  } else {
+    lines.push(...handler.body);
   }
 
   return lines;

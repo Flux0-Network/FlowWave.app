@@ -228,6 +228,36 @@ function DiscordComponent({
         </div>
       );
 
+    case "select-menu": {
+      const placeholder = (component.props.placeholder as string) || "Wähle eine Option...";
+      const selectType = (component.props.select_type as string) || "string";
+      const typeLabels: Record<string, string> = {
+        string: "",
+        user: " (User)",
+        role: " (Role)",
+        channel: " (Channel)",
+        mentionable: " (Mentionable)",
+      };
+      return (
+        <div
+          onClick={(e) => { e.stopPropagation(); onSelect(component.id); }}
+          className={cn(
+            "rounded cursor-pointer",
+            isSelected ? "ring-2 ring-[#5865F2]" : "hover:ring-1 hover:ring-[#5865F2]/50",
+          )}
+        >
+          <div className="flex items-center justify-between rounded bg-[#1E1F22] border border-[#3F4147] px-3 py-2 text-sm">
+            <span className="text-[#949BA4]">
+              {placeholder}{typeLabels[selectType]}
+            </span>
+            <svg className="size-4 text-[#949BA4]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </div>
+        </div>
+      );
+    }
+
     default:
       return null;
   }

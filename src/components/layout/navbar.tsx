@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Cog, Blocks, FolderOpen, Menu, X } from "lucide-react";
+import { Cog, Blocks, FolderOpen, Store, Menu, X } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import { UserMenu } from "@/components/layout/user-menu";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 
@@ -12,6 +13,7 @@ const navItems = [
   { href: "/builder", label: "Components V2 Builder", icon: Blocks },
   { href: "/generator", label: "Cog Generator", icon: Cog },
   { href: "/projects", label: "Projects", icon: FolderOpen },
+  { href: "/marketplace", label: "Marketplace", icon: Store },
 ];
 
 export function Navbar() {
@@ -49,14 +51,7 @@ export function Navbar() {
         </nav>
 
         <div className="hidden md:flex items-center gap-2 ml-auto">
-          <Link
-            href="https://github.com"
-            target="_blank"
-            rel="noopener"
-            className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
-          >
-            GitHub
-          </Link>
+          <UserMenu />
         </div>
 
         <Sheet open={open} onOpenChange={setOpen}>

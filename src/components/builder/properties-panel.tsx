@@ -228,6 +228,114 @@ export function PropertiesPanel({ component, onUpdate, onDelete }: PropertiesPan
           </>
         )}
 
+        {component.type === "select-menu" && (
+          <>
+            <div className="space-y-2">
+              <Label htmlFor="select_type">Select Typ</Label>
+              <Select
+                value={(component.props.select_type as string) || "string"}
+                onValueChange={(v) => update("select_type", v)}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="string">String Select</SelectItem>
+                  <SelectItem value="user">User Select</SelectItem>
+                  <SelectItem value="role">Role Select</SelectItem>
+                  <SelectItem value="channel">Channel Select</SelectItem>
+                  <SelectItem value="mentionable">Mentionable Select</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="custom_id">Custom ID</Label>
+              <Input
+                id="custom_id"
+                value={(component.props.custom_id as string) || ""}
+                onChange={(e) => update("custom_id", e.target.value)}
+                className="font-mono text-sm"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="placeholder">Placeholder</Label>
+              <Input
+                id="placeholder"
+                value={(component.props.placeholder as string) || ""}
+                onChange={(e) => update("placeholder", e.target.value)}
+              />
+            </div>
+            {(component.props.select_type as string) === "string" && (
+              <div className="space-y-2">
+                <Label className="text-xs font-medium">Optionen</Label>
+                {((component.props.options as Array<{label: string; value: string; description?: string; emoji?: string}>) || []).map(
+                  (opt, idx) => (
+                    <div key={idx} className="rounded border p-2 space-y-1">
+                      <div className="flex gap-2">
+                        <Input
+                          value={opt.label}
+                          onChange={(e) => {
+                            const opts = [...((component.props.options as Array<Record<string, string>>) || [])];
+                            opts[idx] = { ...opts[idx], label: e.target.value };
+                            update("options", opts);
+                          }}
+                          placeholder="Label"
+                          className="text-xs h-7"
+                        />
+                        <Input
+                          value={opt.value}
+                          onChange={(e) => {
+                            const opts = [...((component.props.options as Array<Record<string, string>>) || [])];
+                            opts[idx] = { ...opts[idx], value: e.target.value };
+                            update("options", opts);
+                          }}
+                          placeholder="value"
+                          className="font-mono text-xs h-7"
+                        />
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-7 shrink-0 text-destructive"
+                          onClick={() => {
+                            const opts = ((component.props.options as Array<Record<string, string>>) || []).filter(
+                              (_, i) => i !== idx
+                            );
+                            update("options", opts);
+                          }}
+                        >
+                          <Trash2 className="size-3" />
+                        </Button>
+                      </div>
+                    </div>
+                  )
+                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full text-xs"
+                  onClick={() => {
+                    const opts = [
+                      ...((component.props.options as Array<Record<string, string>>) || []),
+                      { label: "Neue Option", value: `opt_${Date.now()}`, description: "", emoji: "" },
+                    ];
+                    update("options", opts);
+                  }}
+                >
+                  + Option
+                </Button>
+              </div>
+            )}
+            <div className="flex items-center justify-between">
+              <Label htmlFor="disabled">Deaktiviert</Label>
+              <Switch
+                id="disabled"
+                checked={(component.props.disabled as boolean) || false}
+                onCheckedChange={(v) => update("disabled", v)}
+              />
+            </div>
+          </>
+        )}
+
         <div className="pt-2 border-t">
           <p className="text-xs text-muted-foreground font-mono">ID: {component.id}</p>
         </div>

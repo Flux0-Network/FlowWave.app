@@ -4,12 +4,16 @@ import { useCallback, useMemo, useState } from "react";
 import { ComponentPalette } from "@/components/builder/component-palette";
 import { DiscordPreview } from "@/components/builder/discord-preview";
 import { PropertiesPanel } from "@/components/builder/properties-panel";
+import { SortableCanvas } from "@/components/builder/sortable-canvas";
 import { CodeOutput } from "@/components/builder/code-output";
+import { TemplateGallery } from "@/components/builder/template-gallery";
+import { ShareDialog } from "@/components/builder/share-dialog";
+import { LivePreviewDialog } from "@/components/builder/live-preview-dialog";
 import { generateComponentsV2Code } from "@/lib/codegen/components-v2";
 import type { BuilderComponent, ComponentType } from "@/types/builder";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
-import { Undo2, Redo2, Trash2 } from "lucide-react";
+import { Undo2, Redo2, Trash2, LayoutTemplate, Share2, Send } from "lucide-react";
 
 let idCounter = 0;
 function genId(): string {
@@ -35,6 +39,18 @@ function createDefaultProps(type: ComponentType): Record<string, unknown> {
       return { items: [] };
     case "action-row":
       return {};
+    case "select-menu":
+      return {
+        select_type: "string",
+        custom_id: "select_" + genId(),
+        placeholder: "Wähle eine Option...",
+        min_values: 1,
+        max_values: 1,
+        options: [
+          { label: "Option 1", value: "opt_1", description: "", emoji: "" },
+          { label: "Option 2", value: "opt_2", description: "", emoji: "" },
+        ],
+      };
     default:
       return {};
   }
@@ -47,6 +63,9 @@ export default function BuilderPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [history, setHistory] = useState<BuilderComponent[][]>([[]]);
   const [historyIdx, setHistoryIdx] = useState(0);
+  const [showTemplates, setShowTemplates] = useState(false);
+  const [showShare, setShowShare] = useState(false);
+  const [showLivePreview, setShowLivePreview] = useState(false);
 
   const pushHistory = useCallback(
     (next: BuilderComponent[]) => {
@@ -120,18 +139,35 @@ export default function BuilderPage() {
     [components, selectedId, pushHistory]
   );
 
+  const handleReorder = useCallback(
+    (reordered: BuilderComponent[]) => {
+      setComponents(reordered);
+      pushHistory(reordered);
+    },
+    [pushHistory]
+  );
+
   const handleClearAll = useCallback(() => {
     setComponents([]);
     pushHistory([]);
     setSelectedId(null);
   }, [pushHistory]);
 
+  const handleLoadTemplate = useCallback(
+    (templateComponents: BuilderComponent[]) => {
+      setComponents(templateComponents);
+      pushHistory(templateComponents);
+      setSelectedId(null);
+      setShowTemplates(false);
+    },
+    [pushHistory]
+  );
+
   const selectedComponent = selectedId ? findComponent(components, selectedId) : null;
   const code = useMemo(() => generateComponentsV2Code(components), [components]);
 
   return (
     <div className="flex flex-col h-[calc(100vh-3.5rem)]">
-      {/* Toolbar */}
       <div className="flex items-center gap-2 border-b px-4 py-2">
         <h1 className="text-lg font-semibold mr-4">Components V2 Builder</h1>
         <Button variant="ghost" size="icon" className="size-8" onClick={undo} disabled={historyIdx <= 0}>
@@ -140,6 +176,18 @@ export default function BuilderPage() {
         <Button variant="ghost" size="icon" className="size-8" onClick={redo} disabled={historyIdx >= history.length - 1}>
           <Redo2 className="size-4" />
         </Button>
+        <Button variant="ghost" size="sm" onClick={() => setShowTemplates(!showTemplates)}>
+          <LayoutTemplate className="size-4 mr-1" />
+          Templates
+        </Button>
+        <Button variant="ghost" size="sm" onClick={() => setShowShare(true)}>
+          <Share2 className="size-4 mr-1" />
+          Teilen
+        </Button>
+        <Button variant="ghost" size="sm" onClick={() => setShowLivePreview(true)}>
+          <Send className="size-4 mr-1" />
+          Live Preview
+        </Button>
         <div className="flex-1" />
         <Button variant="ghost" size="sm" className="text-destructive" onClick={handleClearAll}>
           <Trash2 className="size-4 mr-1" />
@@ -147,14 +195,31 @@ export default function BuilderPage() {
         </Button>
       </div>
 
-      {/* Main layout */}
+      {showTemplates && (
+        <div className="border-b p-4 bg-muted/30">
+          <TemplateGallery onLoad={handleLoadTemplate} />
+        </div>
+      )}
+
       <div className="flex-1 grid grid-cols-[260px_1fr_280px] gap-0 overflow-hidden">
-        {/* Left: Palette */}
-        <div className="border-r overflow-y-auto p-3">
+        <div className="border-r overflow-y-auto p-3 flex flex-col gap-3">
           <ComponentPalette onAdd={handleAdd} />
+          {components.length > 0 && (
+            <div className="border-t pt-3">
+              <h3 className="text-xs font-medium text-muted-foreground mb-2 px-1">
+                Reihenfolge (Drag & Drop)
+              </h3>
+              <SortableCanvas
+                components={components}
+                selectedId={selectedId}
+                onSelect={setSelectedId}
+                onReorder={handleReorder}
+                onDelete={handleDelete}
+              />
+            </div>
+          )}
         </div>
 
-        {/* Center: Preview + Code */}
         <div className="overflow-y-auto p-4">
           <Tabs defaultValue="preview" className="h-full flex flex-col">
             <TabsList className="w-fit">
@@ -174,7 +239,6 @@ export default function BuilderPage() {
           </Tabs>
         </div>
 
-        {/* Right: Properties */}
         <div className="border-l overflow-y-auto p-3">
           <PropertiesPanel
             component={selectedComponent}
@@ -183,6 +247,17 @@ export default function BuilderPage() {
           />
         </div>
       </div>
+
+      <ShareDialog
+        open={showShare}
+        onOpenChange={setShowShare}
+        components={components}
+      />
+      <LivePreviewDialog
+        open={showLivePreview}
+        onOpenChange={setShowLivePreview}
+        components={components}
+      />
     </div>
   );
 }
