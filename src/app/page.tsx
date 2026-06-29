@@ -14,7 +14,7 @@ export default function LandingPage() {
             <div className="size-8 rounded-lg bg-primary flex items-center justify-center">
               <Cog className="size-5 text-primary-foreground" />
             </div>
-            <span>CogsForge</span>
+            <span>Flowcord</span>
           </Link>
           <div className="ml-auto flex items-center gap-2">
             <Link href="/builder" className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}>
@@ -95,7 +95,7 @@ export default function LandingPage() {
               </div>
               <CardTitle>Kein Lock-in</CardTitle>
               <CardDescription>
-                Export als .py-Datei. Du programmierst normal weiter — CogsForge ist
+                Export als .py-Datei. Du programmierst normal weiter — Flowcord ist
                 der Startpunkt, nicht das Gefängnis.
               </CardDescription>
             </CardHeader>
@@ -141,7 +141,7 @@ export default function LandingPage() {
         <div className="container px-4 flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-muted-foreground">
           <div className="flex items-center gap-2">
             <Cog className="size-4" />
-            <span>CogsForge</span>
+            <span>Flowcord</span>
           </div>
           <p>Gebaut für die Discord-Bot-Community.</p>
         </div>

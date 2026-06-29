@@ -27,7 +27,7 @@ export function Navbar() {
           <div className="size-8 rounded-lg bg-primary flex items-center justify-center">
             <Cog className="size-5 text-primary-foreground" />
           </div>
-          <span>CogsForge</span>
+          <span>Flowcord</span>
         </Link>
 
         <nav className="hidden md:flex items-center gap-1 flex-1">
