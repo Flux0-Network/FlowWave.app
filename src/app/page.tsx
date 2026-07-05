@@ -40,14 +40,9 @@ function LandingHeader() {
 function CodeWindow() {
   return (
     <div className="rounded-xl border border-border bg-[oklch(0.07_0.014_258)] shadow-2xl shadow-primary/10 overflow-hidden">
-      {/* macOS-style titlebar */}
-      <div className="flex items-center gap-1.5 px-4 py-3 border-b border-border/70 bg-muted/30">
-        <div className="size-3 rounded-full bg-[#FF5F57]" />
-        <div className="size-3 rounded-full bg-[#FEBC2E]" />
-        <div className="size-3 rounded-full bg-[#28C840]" />
-        <span className="ml-3 text-[11px] text-muted-foreground font-mono tracking-wide">
-          flowwave_bot.py
-        </span>
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-border/70 bg-muted/30">
+        <span className="text-[11px] text-muted-foreground font-mono tracking-wide">flowwave_bot.py</span>
+        <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/15 text-primary font-medium">Python</span>
       </div>
       {/* Syntax-coloured Python */}
       <pre className="p-5 text-[12.5px] leading-[1.7] font-mono overflow-x-auto code-pun select-none">

@@ -32,12 +32,7 @@ export function CodeOutput({ code }: CodeOutputProps) {
       {/* Terminal header */}
       <div className="flex items-center justify-between px-4 py-2.5 bg-muted/40 border-b border-border/70 shrink-0">
         <div className="flex items-center gap-2">
-          <div className="flex gap-1.5">
-            <div className="size-2.5 rounded-full bg-muted-foreground/30" />
-            <div className="size-2.5 rounded-full bg-muted-foreground/30" />
-            <div className="size-2.5 rounded-full bg-muted-foreground/30" />
-          </div>
-          <span className="text-[11px] font-mono text-muted-foreground ml-1">
+          <span className="text-[11px] font-mono text-muted-foreground">
             components_v2.py
           </span>
           <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/15 text-primary font-medium">
