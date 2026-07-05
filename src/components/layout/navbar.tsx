@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { Blocks, FolderOpen, Store, Menu, X, Waves } from "lucide-react";
+import { Blocks, FolderOpen, Store, Menu, X } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { UserMenu } from "@/components/layout/user-menu";
@@ -23,11 +24,8 @@ export function Navbar() {
     <header className="sticky top-0 z-50 w-full border-b border-border/70 bg-background/90 backdrop-blur-md">
       <div className="flex h-13 items-center gap-6 px-4">
         {/* Logo */}
-        <Link href="/" className="flex items-center gap-2.5 font-bold text-sm shrink-0">
-          <div className="size-7 rounded-md bg-primary flex items-center justify-center shadow-[0_0_10px_oklch(0.545_0.24_264/0.45)]">
-            <Waves className="size-3.5 text-primary-foreground" />
-          </div>
-          <span className="tracking-tight hidden sm:inline">FlowWave</span>
+        <Link href="/" className="flex items-center shrink-0">
+          <Image src="/logo.png" alt="FlowWave" width={120} height={40} className="h-8 w-auto object-contain" priority />
         </Link>
 
         {/* Divider */}
