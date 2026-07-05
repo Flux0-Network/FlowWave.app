@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Cog, Blocks, FolderOpen, Store, Menu, X, Waves } from "lucide-react";
+import { Blocks, FolderOpen, Store, Menu, X, Waves } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { UserMenu } from "@/components/layout/user-menu";
@@ -11,7 +11,6 @@ import { cn } from "@/lib/utils";
 
 const navItems = [
   { href: "/builder", label: "Builder", icon: Blocks },
-  { href: "/generator", label: "Cog Generator", icon: Cog },
   { href: "/projects", label: "Projects", icon: FolderOpen },
   { href: "/marketplace", label: "Marketplace", icon: Store },
 ];

@@ -20,9 +20,6 @@ function LandingHeader() {
           <Link href="/builder" className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "text-muted-foreground hover:text-foreground")}>
             Builder
           </Link>
-          <Link href="/generator" className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "text-muted-foreground hover:text-foreground")}>
-            Cog Generator
-          </Link>
           <Link href="/marketplace" className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "text-muted-foreground hover:text-foreground")}>
             Marketplace
           </Link>
@@ -198,7 +195,7 @@ export default function LandingPage() {
                   Components V2 Builder
                   <ArrowRight className="size-4" />
                 </Link>
-                <Link href="/generator" className={cn(buttonVariants({ variant: "outline", size: "lg" }), "gap-2")}>
+                <Link href="/builder" className={cn(buttonVariants({ variant: "outline", size: "lg" }), "gap-2")}>
                   <Cog className="size-5" />
                   Cog Generator
                 </Link>
