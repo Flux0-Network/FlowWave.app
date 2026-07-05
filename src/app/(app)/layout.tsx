@@ -4,7 +4,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <>
       <Navbar />
-      <main className="flex-1 container mx-auto px-4">{children}</main>
+      <main className="flex-1">{children}</main>
     </>
   );
 }

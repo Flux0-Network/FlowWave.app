@@ -14,6 +14,7 @@ import type { BuilderComponent, ComponentType } from "@/types/builder";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Undo2, Redo2, Trash2, LayoutTemplate, Share2, Send } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 let idCounter = 0;
 function genId(): string {
@@ -167,48 +168,74 @@ export default function BuilderPage() {
   const code = useMemo(() => generateComponentsV2Code(components), [components]);
 
   return (
-    <div className="flex flex-col h-[calc(100vh-3.5rem)]">
-      <div className="flex items-center gap-2 border-b px-4 py-2">
-        <h1 className="text-lg font-semibold mr-4">Components V2 Builder</h1>
-        <Button variant="ghost" size="icon" className="size-8" onClick={undo} disabled={historyIdx <= 0}>
-          <Undo2 className="size-4" />
-        </Button>
-        <Button variant="ghost" size="icon" className="size-8" onClick={redo} disabled={historyIdx >= history.length - 1}>
-          <Redo2 className="size-4" />
-        </Button>
-        <Button variant="ghost" size="sm" onClick={() => setShowTemplates(!showTemplates)}>
-          <LayoutTemplate className="size-4 mr-1" />
-          Templates
-        </Button>
-        <Button variant="ghost" size="sm" onClick={() => setShowShare(true)}>
-          <Share2 className="size-4 mr-1" />
-          Teilen
-        </Button>
-        <Button variant="ghost" size="sm" onClick={() => setShowLivePreview(true)}>
-          <Send className="size-4 mr-1" />
-          Live Preview
-        </Button>
+    <div className="flex flex-col h-[calc(100vh-3.25rem)]">
+      {/* Toolbar */}
+      <div className="flex items-center gap-1 border-b border-border/70 bg-card/50 px-3 py-1.5 shrink-0">
+        <span className="text-sm font-semibold text-foreground px-1 mr-2">Components V2</span>
+
+        {/* History group */}
+        <div className="flex items-center gap-0.5">
+          <Button variant="ghost" size="icon" className="size-7 text-muted-foreground hover:text-foreground" onClick={undo} disabled={historyIdx <= 0}>
+            <Undo2 className="size-3.5" />
+          </Button>
+          <Button variant="ghost" size="icon" className="size-7 text-muted-foreground hover:text-foreground" onClick={redo} disabled={historyIdx >= history.length - 1}>
+            <Redo2 className="size-3.5" />
+          </Button>
+        </div>
+
+        <div className="w-px h-4 bg-border mx-1" />
+
+        {/* Actions group */}
+        <div className="flex items-center gap-0.5">
+          <Button
+            variant="ghost"
+            size="sm"
+            className={cn("h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground", showTemplates && "bg-accent text-accent-foreground")}
+            onClick={() => setShowTemplates(!showTemplates)}
+          >
+            <LayoutTemplate className="size-3.5" />
+            Templates
+          </Button>
+          <Button variant="ghost" size="sm" className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground" onClick={() => setShowShare(true)}>
+            <Share2 className="size-3.5" />
+            Teilen
+          </Button>
+          <Button variant="ghost" size="sm" className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground" onClick={() => setShowLivePreview(true)}>
+            <Send className="size-3.5" />
+            Live Preview
+          </Button>
+        </div>
+
         <div className="flex-1" />
-        <Button variant="ghost" size="sm" className="text-destructive" onClick={handleClearAll}>
-          <Trash2 className="size-4 mr-1" />
-          Alles löschen
+
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-destructive"
+          onClick={handleClearAll}
+        >
+          <Trash2 className="size-3.5" />
+          Leeren
         </Button>
       </div>
 
       {showTemplates && (
-        <div className="border-b p-4 bg-muted/30">
+        <div className="border-b border-border/70 px-4 py-3 bg-muted/20">
           <TemplateGallery onLoad={handleLoadTemplate} />
         </div>
       )}
 
-      <div className="flex-1 grid grid-cols-[260px_1fr_280px] gap-0 overflow-hidden">
-        <div className="border-r overflow-y-auto p-3 flex flex-col gap-3">
-          <ComponentPalette onAdd={handleAdd} />
+      <div className="flex-1 grid grid-cols-[256px_1fr_272px] gap-0 overflow-hidden">
+        {/* Left: palette + canvas */}
+        <div className="border-r border-border/70 overflow-y-auto flex flex-col gap-0 bg-card/30">
+          <div className="p-3">
+            <ComponentPalette onAdd={handleAdd} />
+          </div>
           {components.length > 0 && (
-            <div className="border-t pt-3">
-              <h3 className="text-xs font-medium text-muted-foreground mb-2 px-1">
-                Reihenfolge (Drag & Drop)
-              </h3>
+            <div className="border-t border-border/70 p-3">
+              <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-2 px-1">
+                Reihenfolge
+              </p>
               <SortableCanvas
                 components={components}
                 selectedId={selectedId}
@@ -220,11 +247,12 @@ export default function BuilderPage() {
           )}
         </div>
 
-        <div className="overflow-y-auto p-4">
+        {/* Center: preview + code */}
+        <div className="overflow-y-auto p-4 bg-background">
           <Tabs defaultValue="preview" className="h-full flex flex-col">
-            <TabsList className="w-fit">
-              <TabsTrigger value="preview">Live Preview</TabsTrigger>
-              <TabsTrigger value="code">Code</TabsTrigger>
+            <TabsList className="w-fit h-8">
+              <TabsTrigger value="preview" className="text-xs px-3">Discord Preview</TabsTrigger>
+              <TabsTrigger value="code" className="text-xs px-3">Python Code</TabsTrigger>
             </TabsList>
             <TabsContent value="preview" className="flex-1 mt-4">
               <DiscordPreview
@@ -239,7 +267,8 @@ export default function BuilderPage() {
           </Tabs>
         </div>
 
-        <div className="border-l overflow-y-auto p-3">
+        {/* Right: properties */}
+        <div className="border-l border-border/70 overflow-y-auto bg-card/30">
           <PropertiesPanel
             component={selectedComponent}
             onUpdate={handleUpdate}
@@ -248,16 +277,8 @@ export default function BuilderPage() {
         </div>
       </div>
 
-      <ShareDialog
-        open={showShare}
-        onOpenChange={setShowShare}
-        components={components}
-      />
-      <LivePreviewDialog
-        open={showLivePreview}
-        onOpenChange={setShowLivePreview}
-        components={components}
-      />
+      <ShareDialog open={showShare} onOpenChange={setShowShare} components={components} />
+      <LivePreviewDialog open={showLivePreview} onOpenChange={setShowLivePreview} components={components} />
     </div>
   );
 }

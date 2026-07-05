@@ -30,12 +30,13 @@ export default function GeneratorPage() {
   );
 
   return (
-    <div className="flex flex-col h-[calc(100vh-3.5rem)]">
-      <div className="flex items-center gap-4 border-b px-4 py-2">
-        <h1 className="text-lg font-semibold">Cog Generator</h1>
-        <div className="flex items-center gap-2">
-          <Label htmlFor="cogName" className="text-sm whitespace-nowrap">
-            Cog Name:
+    <div className="flex flex-col h-[calc(100vh-3.25rem)]">
+      {/* Header */}
+      <div className="flex items-center gap-4 border-b border-border/70 bg-card/50 px-4 py-1.5 shrink-0">
+        <span className="text-sm font-semibold">Cog Generator</span>
+        <div className="flex items-center gap-2 ml-2">
+          <Label htmlFor="cogName" className="text-xs text-muted-foreground whitespace-nowrap">
+            Name:
           </Label>
           <Input
             id="cogName"
@@ -46,21 +47,21 @@ export default function GeneratorPage() {
                 cogName: e.target.value.replace(/[^a-zA-Z0-9_]/g, ""),
               })
             }
-            className="w-48 font-mono text-sm h-8"
+            className="w-44 font-mono text-xs h-7 bg-background"
           />
         </div>
       </div>
 
       <div className="flex-1 grid grid-cols-[1fr_1fr] gap-0 overflow-hidden">
-        <ScrollArea className="border-r">
+        <ScrollArea className="border-r border-border/70 bg-card/30">
           <div className="p-4">
             <Tabs defaultValue="commands">
-              <TabsList className="w-full">
-                <TabsTrigger value="commands" className="flex-1">Commands</TabsTrigger>
-                <TabsTrigger value="modals" className="flex-1">Modals</TabsTrigger>
-                <TabsTrigger value="sqlite" className="flex-1">SQLite</TabsTrigger>
-                <TabsTrigger value="events" className="flex-1">Events</TabsTrigger>
-                <TabsTrigger value="autocomplete" className="flex-1">Auto</TabsTrigger>
+              <TabsList className="w-full h-8">
+                <TabsTrigger value="commands" className="flex-1 text-xs">Commands</TabsTrigger>
+                <TabsTrigger value="modals" className="flex-1 text-xs">Modals</TabsTrigger>
+                <TabsTrigger value="sqlite" className="flex-1 text-xs">SQLite</TabsTrigger>
+                <TabsTrigger value="events" className="flex-1 text-xs">Events</TabsTrigger>
+                <TabsTrigger value="autocomplete" className="flex-1 text-xs">Auto</TabsTrigger>
               </TabsList>
               <TabsContent value="commands" className="mt-4">
                 <CommandBuilder
@@ -97,7 +98,7 @@ export default function GeneratorPage() {
           </div>
         </ScrollArea>
 
-        <div className="overflow-y-auto p-4">
+        <div className="overflow-y-auto p-4 bg-background">
           <CodeOutput code={code} />
         </div>
       </div>

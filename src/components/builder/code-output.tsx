@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Check, Copy, Download } from "lucide-react";
 
@@ -29,27 +28,52 @@ export function CodeOutput({ code }: CodeOutputProps) {
   };
 
   return (
-    <Card className="h-full flex flex-col">
-      <CardHeader className="flex flex-row items-center justify-between pb-3">
-        <CardTitle className="text-sm font-medium">Python Code</CardTitle>
+    <div className="h-full flex flex-col rounded-xl border border-border overflow-hidden">
+      {/* Terminal header */}
+      <div className="flex items-center justify-between px-4 py-2.5 bg-muted/40 border-b border-border/70 shrink-0">
+        <div className="flex items-center gap-2">
+          <div className="flex gap-1.5">
+            <div className="size-2.5 rounded-full bg-muted-foreground/30" />
+            <div className="size-2.5 rounded-full bg-muted-foreground/30" />
+            <div className="size-2.5 rounded-full bg-muted-foreground/30" />
+          </div>
+          <span className="text-[11px] font-mono text-muted-foreground ml-1">
+            components_v2.py
+          </span>
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/15 text-primary font-medium">
+            Python
+          </span>
+        </div>
         <div className="flex gap-1">
-          <Button variant="ghost" size="icon" className="size-8" onClick={handleCopy}>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7 text-muted-foreground hover:text-foreground"
+            onClick={handleCopy}
+          >
             {copied ? (
-              <Check className="size-4 text-green-500" />
+              <Check className="size-3.5 text-emerald-400" />
             ) : (
-              <Copy className="size-4" />
+              <Copy className="size-3.5" />
             )}
           </Button>
-          <Button variant="ghost" size="icon" className="size-8" onClick={handleDownload}>
-            <Download className="size-4" />
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7 text-muted-foreground hover:text-foreground"
+            onClick={handleDownload}
+          >
+            <Download className="size-3.5" />
           </Button>
         </div>
-      </CardHeader>
-      <CardContent className="flex-1 overflow-auto">
-        <pre className="text-xs font-mono bg-muted rounded-md p-4 overflow-x-auto whitespace-pre">
+      </div>
+
+      {/* Code body */}
+      <div className="flex-1 overflow-auto bg-[oklch(0.072_0.013_258)]">
+        <pre className="p-4 text-[12.5px] font-mono leading-[1.65] text-[#abb2bf] overflow-x-auto whitespace-pre min-h-full">
           <code>{code}</code>
         </pre>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

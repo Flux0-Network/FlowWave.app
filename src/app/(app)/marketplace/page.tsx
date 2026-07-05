@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Search,
   Download,
@@ -19,9 +19,10 @@ import {
   Gamepad2,
   Bell,
   MessageSquare,
-  Cog,
   Eye,
+  Sparkles,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 interface MarketplaceCog {
   id: string;
@@ -145,6 +146,15 @@ const categories = [
   { value: "entertainment", label: "Entertainment" },
 ];
 
+function StarRating({ rating }: { rating: number }) {
+  return (
+    <div className="flex items-center gap-1">
+      <Star className="size-3 fill-amber-400 text-amber-400" />
+      <span className="text-xs font-medium tabular-nums">{rating}</span>
+    </div>
+  );
+}
+
 export default function MarketplacePage() {
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("all");
@@ -162,124 +172,46 @@ export default function MarketplacePage() {
   const featured = marketplaceCogs.filter((c) => c.featured);
 
   return (
-    <div className="py-8 max-w-6xl mx-auto">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold mb-2">Cog Marketplace</h1>
+    <div className="py-8 max-w-6xl mx-auto px-4">
+      {/* Header */}
+      <div className="mb-10">
+        <h1 className="text-3xl font-bold tracking-tight mb-2">Marketplace</h1>
         <p className="text-muted-foreground">
-          Entdecke fertige Cogs von der Community — installiere sie mit einem Klick
-          oder nutze sie als Startpunkt.
+          Fertige Cogs von der Community — sofort einsatzbereit oder als Startpunkt.
         </p>
       </div>
 
       {/* Featured */}
-      <div className="mb-8">
-        <h2 className="text-lg font-semibold mb-4">Featured</h2>
+      <div className="mb-10">
+        <div className="flex items-center gap-2 mb-4">
+          <Sparkles className="size-4 text-primary" />
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Featured</h2>
+        </div>
         <div className="grid md:grid-cols-2 gap-4">
           {featured.map((cog) => (
-            <Card key={cog.id} className="border-primary/20 bg-primary/5">
-              <CardHeader>
-                <div className="flex items-start justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="size-12 rounded-lg bg-primary/10 flex items-center justify-center">
-                      <cog.icon className="size-6 text-primary" />
+            <div
+              key={cog.id}
+              className="rounded-xl border border-primary/25 bg-gradient-to-br from-primary/8 to-card p-5 flex flex-col gap-4"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="size-11 rounded-lg bg-primary/15 flex items-center justify-center shrink-0">
+                    <cog.icon className="size-5 text-primary" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-sm">{cog.name}</span>
+                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0 border-primary/30 bg-primary/10 text-primary">
+                        Featured
+                      </Badge>
                     </div>
-                    <div>
-                      <CardTitle className="flex items-center gap-2">
-                        {cog.name}
-                        <Badge className="text-xs">Featured</Badge>
-                      </CardTitle>
-                      <p className="text-xs text-muted-foreground">von {cog.author}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1 text-yellow-500">
-                    <Star className="size-4 fill-current" />
-                    <span className="text-sm font-medium">{cog.rating}</span>
+                    <p className="text-[11px] text-muted-foreground mt-0.5">von {cog.author}</p>
                   </div>
                 </div>
-                <CardDescription className="mt-2">{cog.description}</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="flex items-center justify-between">
-                  <div className="flex gap-4 text-sm text-muted-foreground">
-                    <span className="flex items-center gap-1">
-                      <Download className="size-3.5" />
-                      {cog.downloads.toLocaleString()}
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <Heart className="size-3.5" />
-                      {cog.likes}
-                    </span>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button variant="outline" size="sm" className="gap-1">
-                      <Eye className="size-3.5" />
-                      Preview
-                    </Button>
-                    <Button size="sm" className="gap-1">
-                      <Download className="size-3.5" />
-                      Installieren
-                    </Button>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      </div>
-
-      {/* Search + Filter */}
-      <div className="flex gap-3 mb-6">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Cogs durchsuchen..."
-            className="pl-10"
-          />
-        </div>
-        <Tabs value={category} onValueChange={setCategory}>
-          <TabsList>
-            {categories.map((cat) => (
-              <TabsTrigger key={cat.value} value={cat.value}>
-                {cat.label}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
-      </div>
-
-      {/* Cog Grid */}
-      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {filtered.map((cog) => (
-          <Card key={cog.id} className="hover:border-primary/30 transition-colors">
-            <CardHeader className="pb-3">
-              <div className="flex items-center gap-3">
-                <div className="size-10 rounded-lg bg-muted flex items-center justify-center">
-                  <cog.icon className="size-5 text-muted-foreground" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <CardTitle className="text-sm">{cog.name}</CardTitle>
-                  <p className="text-xs text-muted-foreground">von {cog.author}</p>
-                </div>
-                <div className="flex items-center gap-1 text-yellow-500">
-                  <Star className="size-3 fill-current" />
-                  <span className="text-xs">{cog.rating}</span>
-                </div>
+                <StarRating rating={cog.rating} />
               </div>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm text-muted-foreground mb-3 line-clamp-2">
-                {cog.description}
-              </p>
-              <div className="flex flex-wrap gap-1 mb-3">
-                {cog.tags.map((tag) => (
-                  <Badge key={tag} variant="secondary" className="text-xs">
-                    {tag}
-                  </Badge>
-                ))}
-              </div>
-              <div className="flex items-center justify-between">
+              <p className="text-sm text-muted-foreground leading-relaxed">{cog.description}</p>
+              <div className="flex items-center justify-between pt-1">
                 <div className="flex gap-3 text-xs text-muted-foreground">
                   <span className="flex items-center gap-1">
                     <Download className="size-3" />
@@ -290,9 +222,91 @@ export default function MarketplacePage() {
                     {cog.likes}
                   </span>
                 </div>
-                <Button size="sm" variant="outline" className="h-7 text-xs gap-1">
-                  <Cog className="size-3" />
-                  Nutzen
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" className="h-7 text-xs gap-1">
+                    <Eye className="size-3" />
+                    Preview
+                  </Button>
+                  <Button size="sm" className="h-7 text-xs gap-1">
+                    <Download className="size-3" />
+                    Installieren
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Search + filter */}
+      <div className="flex gap-3 mb-6">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Cogs durchsuchen..."
+            className="pl-9 h-9"
+          />
+        </div>
+        <Tabs value={category} onValueChange={setCategory}>
+          <TabsList className="h-9">
+            {categories.map((cat) => (
+              <TabsTrigger key={cat.value} value={cat.value} className="text-xs px-3">
+                {cat.label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
+      </div>
+
+      {/* Grid */}
+      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {filtered.map((cog) => (
+          <Card
+            key={cog.id}
+            className={cn(
+              "border-border hover:border-primary/30 transition-colors",
+              "flex flex-col"
+            )}
+          >
+            <CardHeader className="pb-3">
+              <div className="flex items-center gap-3">
+                <div className="size-9 rounded-lg bg-muted flex items-center justify-center shrink-0">
+                  <cog.icon className="size-4 text-muted-foreground" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <CardTitle className="text-[13px] leading-tight">{cog.name}</CardTitle>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">von {cog.author}</p>
+                </div>
+                <StarRating rating={cog.rating} />
+              </div>
+            </CardHeader>
+            <CardContent className="flex-1 flex flex-col gap-3">
+              <CardDescription className="text-xs leading-relaxed line-clamp-2">
+                {cog.description}
+              </CardDescription>
+              <div className="flex flex-wrap gap-1">
+                {cog.tags.map((tag) => (
+                  <Badge key={tag} variant="secondary" className="text-[10px] px-1.5 py-0 h-4">
+                    {tag}
+                  </Badge>
+                ))}
+              </div>
+              <div className="flex items-center justify-between pt-1 mt-auto">
+                <div className="flex gap-3 text-xs text-muted-foreground">
+                  <span className="flex items-center gap-1 tabular-nums">
+                    <Download className="size-3" />
+                    {cog.downloads.toLocaleString()}
+                  </span>
+                  <span className="flex items-center gap-1 tabular-nums">
+                    <Heart className="size-3" />
+                    {cog.likes}
+                  </span>
+                </div>
+                <Button size="sm" className="h-7 text-xs gap-1">
+                  <Download className="size-3" />
+                  Install
                 </Button>
               </div>
             </CardContent>
@@ -302,8 +316,8 @@ export default function MarketplacePage() {
 
       {filtered.length === 0 && (
         <div className="text-center py-16 text-muted-foreground">
-          <Search className="size-8 mx-auto mb-4 opacity-50" />
-          <p>Keine Cogs gefunden für &quot;{search}&quot;</p>
+          <Search className="size-8 mx-auto mb-3 opacity-40" />
+          <p className="text-sm">Keine Cogs gefunden für &ldquo;{search}&rdquo;</p>
         </div>
       )}
     </div>
