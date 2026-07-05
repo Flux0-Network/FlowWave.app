@@ -1,188 +1,356 @@
 import type { BuilderComponent } from "@/types/builder";
 
+/**
+ * Generates Pycord v2.8 code using discord.ui.DesignerView.
+ * Components are declared as class-level attributes (declarative pattern).
+ * Interactive components (buttons, selects) get @discord.ui.button / @discord.ui.select callbacks.
+ */
 export function generateComponentsV2Code(components: BuilderComponent[]): string {
   const lines: string[] = [
     "import discord",
     "from discord.ext import commands",
     "",
     "",
-    "class ComponentsView(discord.ui.View):",
-    "    def __init__(self):",
-    "        super().__init__()",
-    "",
   ];
 
-  const callbacks: string[] = [];
-  collectCallbacks(components, callbacks);
+  const buttons: Array<{ customId: string; label: string; style: string }> = [];
+  const selectMenus: Array<{ customId: string; placeholder: string; selectType: string }> = [];
+  collectInteractives(components, buttons, selectMenus);
 
-  if (callbacks.length > 0) {
-    lines.push(...callbacks);
-    lines.push("");
+  // ── DesignerView class ──────────────────────────────────────────────────────
+  lines.push("class MyView(discord.ui.DesignerView):");
+  lines.push('    """FlowWave — Pycord v2.8 Components V2 (DesignerView)"""');
+  lines.push("");
+
+  if (components.length === 0) {
+    lines.push("    pass");
+  } else {
+    // Class-level component declarations
+    const attrs = buildClassAttributes(components, "    ");
+    lines.push(...attrs);
   }
 
-  lines.push("");
-  lines.push("def build_message_components():");
-  lines.push('    """Baut die Components-V2-Nachricht."""');
-  lines.push("    components = []");
-  lines.push("");
-
-  for (const comp of components) {
-    const compLines = generateComponent(comp, "    ");
-    lines.push(...compLines);
+  // ── Button callbacks ────────────────────────────────────────────────────────
+  if (buttons.length > 0) {
     lines.push("");
+    const styleMap: Record<string, string> = {
+      primary: "discord.ButtonStyle.primary",
+      secondary: "discord.ButtonStyle.secondary",
+      success: "discord.ButtonStyle.success",
+      danger: "discord.ButtonStyle.danger",
+      link: "discord.ButtonStyle.link",
+    };
+    for (const btn of buttons) {
+      const fnName = sanitize(btn.customId);
+      lines.push(
+        `    @discord.ui.button(custom_id=${JSON.stringify(btn.customId)}, label=${JSON.stringify(btn.label)}, style=${styleMap[btn.style] ?? "discord.ButtonStyle.primary"})`
+      );
+      lines.push(
+        `    async def ${fnName}(self, button: discord.ui.Button, interaction: discord.Interaction) -> None:`
+      );
+      lines.push(
+        `        await interaction.response.send_message("'${btn.label}' geklickt!", ephemeral=True)`
+      );
+      lines.push("");
+    }
   }
 
-  lines.push("    return components");
+  // ── Select callbacks ────────────────────────────────────────────────────────
+  if (selectMenus.length > 0) {
+    lines.push("");
+    for (const sel of selectMenus) {
+      const fnName = sanitize(sel.customId);
+      const cls = selectClass(sel.selectType);
+      lines.push(
+        `    @discord.ui.select(cls=${cls}, custom_id=${JSON.stringify(sel.customId)}, placeholder=${JSON.stringify(sel.placeholder)})`
+      );
+      lines.push(
+        `    async def ${fnName}(self, select: discord.ui.Select, interaction: discord.Interaction) -> None:`
+      );
+      lines.push(
+        `        await interaction.response.send_message(f"Ausgewählt: {select.values}", ephemeral=True)`
+      );
+      lines.push("");
+    }
+  }
+
+  // ── Usage ───────────────────────────────────────────────────────────────────
   lines.push("");
   lines.push("");
-  lines.push("# Beispiel: Nachricht senden");
-  lines.push("# await ctx.respond(components=build_message_components())");
+  lines.push("# ── Verwendung ───────────────────────────────────────────────────────────────");
+  lines.push("# view = MyView()");
+  lines.push("# await ctx.respond(view=view, flags=discord.MessageFlags.is_components_v2)");
+  lines.push("#");
+  lines.push("# In einem Cog-Command:");
+  lines.push("# @discord.slash_command()");
+  lines.push("# async def show(self, ctx: discord.ApplicationContext):");
+  lines.push("#     await ctx.respond(view=MyView(), flags=discord.MessageFlags.is_components_v2)");
 
   return lines.join("\n");
 }
 
-function generateComponent(comp: BuilderComponent, indent: string): string[] {
+// ── Class-level attribute builders ─────────────────────────────────────────────
+
+function buildClassAttributes(components: BuilderComponent[], indent: string): string[] {
   const lines: string[] = [];
-  const varName = `comp_${comp.id.replace(/-/g, "_").slice(0, 8)}`;
+  let attrIdx = 0;
 
-  switch (comp.type) {
-    case "container": {
-      const color = comp.props.accent_color
-        ? `discord.Color.from_str("${comp.props.accent_color}")`
-        : "None";
-      lines.push(`${indent}# Container`);
-      lines.push(`${indent}${varName}_children = []`);
-      if (comp.children) {
-        for (const child of comp.children) {
-          const childLines = generateComponent(child, indent);
-          lines.push(...childLines);
-          lines.push(
-            `${indent}${varName}_children.append(comp_${child.id.replace(/-/g, "_").slice(0, 8)})`
-          );
-        }
+  for (const comp of components) {
+    const attrName = `component_${attrIdx++}`;
+    const expr = componentExpr(comp, indent + "    ");
+    if (!expr) continue;
+
+    if (expr.multiline) {
+      lines.push(`${indent}${attrName} = ${expr.lines[0]}`);
+      for (let i = 1; i < expr.lines.length; i++) {
+        lines.push(expr.lines[i]);
       }
-      lines.push(
-        `${indent}${varName} = discord.Container(*${varName}_children, accent_colour=${color}${comp.props.spoiler ? ", spoiler=True" : ""})`
-      );
-      lines.push(`${indent}components.append(${varName})`);
-      break;
+    } else {
+      lines.push(`${indent}${attrName} = ${expr.lines[0]}`);
     }
-
-    case "section": {
-      lines.push(`${indent}# Section`);
-      const sectionChildren: string[] = [];
-      if (comp.children) {
-        for (const child of comp.children) {
-          const childLines = generateComponent(child, indent);
-          lines.push(...childLines);
-          sectionChildren.push(
-            `comp_${child.id.replace(/-/g, "_").slice(0, 8)}`
-          );
-        }
-      }
-      lines.push(
-        `${indent}${varName} = discord.Section(${sectionChildren.join(", ")})`
-      );
-      break;
-    }
-
-    case "text-display": {
-      const content = (comp.props.content as string) || "Text";
-      lines.push(
-        `${indent}${varName} = discord.TextDisplay(${JSON.stringify(content)})`
-      );
-      break;
-    }
-
-    case "button": {
-      const label = (comp.props.label as string) || "Button";
-      const style = (comp.props.style as string) || "primary";
-      const styleMap: Record<string, string> = {
-        primary: "discord.ButtonStyle.primary",
-        secondary: "discord.ButtonStyle.secondary",
-        success: "discord.ButtonStyle.success",
-        danger: "discord.ButtonStyle.danger",
-        link: "discord.ButtonStyle.link",
-      };
-      const customId = comp.props.custom_id as string;
-      const url = comp.props.url as string;
-      const emoji = comp.props.emoji as string;
-
-      let args = `label=${JSON.stringify(label)}, style=${styleMap[style]}`;
-      if (customId) args += `, custom_id=${JSON.stringify(customId)}`;
-      if (url && style === "link") args += `, url=${JSON.stringify(url)}`;
-      if (emoji) args += `, emoji=${JSON.stringify(emoji)}`;
-      if (comp.props.disabled) args += `, disabled=True`;
-
-      lines.push(`${indent}${varName} = discord.Button(${args})`);
-      break;
-    }
-
-    case "separator": {
-      const divider = comp.props.divider !== false;
-      const spacing = (comp.props.spacing as string) === "large"
-        ? "discord.SeparatorSpacing.large"
-        : "discord.SeparatorSpacing.small";
-      lines.push(
-        `${indent}${varName} = discord.Separator(divider=${divider ? "True" : "False"}, spacing=${spacing})`
-      );
-      break;
-    }
-
-    case "thumbnail": {
-      const url = (comp.props.url as string) || "https://example.com/image.png";
-      let args = `url=${JSON.stringify(url)}`;
-      if (comp.props.description)
-        args += `, description=${JSON.stringify(comp.props.description)}`;
-      if (comp.props.spoiler) args += `, spoiler=True`;
-      lines.push(`${indent}${varName} = discord.Thumbnail(${args})`);
-      break;
-    }
-
-    case "media-gallery": {
-      lines.push(`${indent}${varName} = discord.MediaGallery(`);
-      lines.push(`${indent}    discord.MediaGalleryItem(url="https://example.com/image1.png"),`);
-      lines.push(`${indent}    discord.MediaGalleryItem(url="https://example.com/image2.png"),`);
-      lines.push(`${indent})`);
-      break;
-    }
-
-    case "action-row": {
-      lines.push(`${indent}# Action Row`);
-      const rowChildren: string[] = [];
-      if (comp.children) {
-        for (const child of comp.children) {
-          const childLines = generateComponent(child, indent);
-          lines.push(...childLines);
-          rowChildren.push(
-            `comp_${child.id.replace(/-/g, "_").slice(0, 8)}`
-          );
-        }
-      }
-      lines.push(
-        `${indent}${varName} = discord.ActionRow(${rowChildren.join(", ")})`
-      );
-      break;
-    }
+    lines.push("");
   }
 
   return lines;
 }
 
-function collectCallbacks(components: BuilderComponent[], callbacks: string[]) {
+interface Expr {
+  lines: string[];
+  multiline: boolean;
+}
+
+function componentExpr(comp: BuilderComponent, childIndent: string): Expr | null {
+  switch (comp.type) {
+    case "container": {
+      const color = comp.props.accent_color
+        ? `discord.Color.from_str(${JSON.stringify(comp.props.accent_color)})`
+        : "None";
+      const spoiler = comp.props.spoiler ? ",\n" + childIndent + "    spoiler=True" : "";
+      const childLines = childExprs(comp.children ?? [], childIndent + "    ");
+      return {
+        multiline: true,
+        lines: [
+          `discord.ui.Container(`,
+          ...childLines,
+          `${childIndent}    accent_colour=${color}${spoiler},`,
+          `${childIndent})`,
+        ],
+      };
+    }
+
+    case "section": {
+      const childLines = childExprs(comp.children ?? [], childIndent + "    ");
+      return {
+        multiline: true,
+        lines: [
+          `discord.ui.Section(`,
+          ...childLines,
+          `${childIndent})`,
+        ],
+      };
+    }
+
+    case "text-display": {
+      const content = JSON.stringify((comp.props.content as string) || "Text");
+      return { multiline: false, lines: [`discord.ui.TextDisplay(${content})`] };
+    }
+
+    case "separator": {
+      const divider = comp.props.divider !== false ? "True" : "False";
+      const spacing =
+        (comp.props.spacing as string) === "large"
+          ? "discord.SeparatorSpacing.large"
+          : "discord.SeparatorSpacing.small";
+      return {
+        multiline: false,
+        lines: [`discord.ui.Separator(divider=${divider}, spacing=${spacing})`],
+      };
+    }
+
+    case "thumbnail": {
+      const url = JSON.stringify((comp.props.url as string) || "https://example.com/image.png");
+      const desc = comp.props.description
+        ? `, description=${JSON.stringify(comp.props.description)}`
+        : "";
+      const spoiler = comp.props.spoiler ? ", spoiler=True" : "";
+      return {
+        multiline: false,
+        lines: [`discord.ui.Thumbnail(url=${url}${desc}${spoiler})`],
+      };
+    }
+
+    case "media-gallery": {
+      return {
+        multiline: true,
+        lines: [
+          `discord.ui.MediaGallery(`,
+          `${childIndent}    discord.ui.MediaGalleryItem(url="https://example.com/image1.png"),`,
+          `${childIndent}    discord.ui.MediaGalleryItem(url="https://example.com/image2.png"),`,
+          `${childIndent})`,
+        ],
+      };
+    }
+
+    case "action-row": {
+      const items = actionRowItems(comp.children ?? [], childIndent + "    ");
+      return {
+        multiline: true,
+        lines: [
+          `discord.ui.ActionRow(`,
+          ...items,
+          `${childIndent})`,
+        ],
+      };
+    }
+
+    case "button": {
+      // Standalone button → wrap in ActionRow
+      return {
+        multiline: true,
+        lines: [
+          `discord.ui.ActionRow(`,
+          buttonLine(comp, childIndent + "    ") + ",",
+          `${childIndent})`,
+        ],
+      };
+    }
+
+    case "select-menu": {
+      // Standalone select → wrap in ActionRow
+      return {
+        multiline: true,
+        lines: [
+          `discord.ui.ActionRow(`,
+          selectLine(comp, childIndent + "    ") + ",",
+          `${childIndent})`,
+        ],
+      };
+    }
+
+    default:
+      return null;
+  }
+}
+
+function childExprs(children: BuilderComponent[], indent: string): string[] {
+  const lines: string[] = [];
+  for (const child of children) {
+    const expr = componentExpr(child, indent + "    ");
+    if (!expr) continue;
+    if (expr.multiline) {
+      lines.push(`${indent}${expr.lines[0]}`);
+      for (let i = 1; i < expr.lines.length - 1; i++) {
+        lines.push(expr.lines[i]);
+      }
+      lines.push(expr.lines[expr.lines.length - 1] + ",");
+    } else {
+      lines.push(`${indent}${expr.lines[0]},`);
+    }
+  }
+  return lines;
+}
+
+function actionRowItems(children: BuilderComponent[], indent: string): string[] {
+  const lines: string[] = [];
+  for (const child of children) {
+    if (child.type === "button") {
+      lines.push(buttonLine(child, indent) + ",");
+    } else if (child.type === "select-menu") {
+      lines.push(selectLine(child, indent) + ",");
+    }
+  }
+  if (lines.length === 0) {
+    lines.push(
+      `${indent}discord.ui.Button(label="Button", style=discord.ButtonStyle.secondary, custom_id="placeholder"),`
+    );
+  }
+  return lines;
+}
+
+function buttonLine(comp: BuilderComponent, indent: string): string {
+  const label = JSON.stringify((comp.props.label as string) || "Button");
+  const style = (comp.props.style as string) || "primary";
+  const styleMap: Record<string, string> = {
+    primary: "discord.ButtonStyle.primary",
+    secondary: "discord.ButtonStyle.secondary",
+    success: "discord.ButtonStyle.success",
+    danger: "discord.ButtonStyle.danger",
+    link: "discord.ButtonStyle.link",
+  };
+  const parts = [
+    `label=${label}`,
+    `style=${styleMap[style] ?? "discord.ButtonStyle.secondary"}`,
+  ];
+  if (comp.props.custom_id) parts.push(`custom_id=${JSON.stringify(comp.props.custom_id)}`);
+  if (style === "link" && comp.props.url) parts.push(`url=${JSON.stringify(comp.props.url)}`);
+  if (comp.props.emoji) parts.push(`emoji=${JSON.stringify(comp.props.emoji)}`);
+  if (comp.props.disabled) parts.push("disabled=True");
+  return `${indent}discord.ui.Button(${parts.join(", ")})`;
+}
+
+function selectLine(comp: BuilderComponent, indent: string): string {
+  const selectType = (comp.props.select_type as string) || "string";
+  const cls = selectClass(selectType);
+  const parts: string[] = [];
+  if (comp.props.custom_id) parts.push(`custom_id=${JSON.stringify(comp.props.custom_id)}`);
+  if (comp.props.placeholder) parts.push(`placeholder=${JSON.stringify(comp.props.placeholder)}`);
+  if (comp.props.min_values !== undefined) parts.push(`min_values=${comp.props.min_values}`);
+  if (comp.props.max_values !== undefined) parts.push(`max_values=${comp.props.max_values}`);
+
+  if (selectType === "string") {
+    const options =
+      (comp.props.options as Array<{ label: string; value: string; description?: string }>) ?? [];
+    const optStr = options
+      .map(
+        (o) =>
+          `discord.SelectOption(label=${JSON.stringify(o.label)}, value=${JSON.stringify(o.value)}${o.description ? `, description=${JSON.stringify(o.description)}` : ""})`
+      )
+      .join(", ");
+    parts.push(`options=[${optStr}]`);
+    return `${indent}discord.ui.Select(${parts.join(", ")})`;
+  }
+  return `${indent}${cls}(${parts.join(", ")})`;
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────────────
+
+function selectClass(selectType: string): string {
+  const map: Record<string, string> = {
+    string: "discord.ui.Select",
+    user: "discord.ui.UserSelect",
+    role: "discord.ui.RoleSelect",
+    channel: "discord.ui.ChannelSelect",
+    mentionable: "discord.ui.MentionableSelect",
+  };
+  return map[selectType] ?? "discord.ui.Select";
+}
+
+function sanitize(id: string): string {
+  return id.replace(/[^a-zA-Z0-9_]/g, "_");
+}
+
+function collectInteractives(
+  components: BuilderComponent[],
+  buttons: Array<{ customId: string; label: string; style: string }>,
+  selectMenus: Array<{ customId: string; placeholder: string; selectType: string }>
+) {
   for (const comp of components) {
     if (comp.type === "button" && comp.props.custom_id) {
-      const customId = comp.props.custom_id as string;
-      const fnName = customId.replace(/[^a-zA-Z0-9_]/g, "_");
-      callbacks.push(
-        `    @discord.ui.button(label=${JSON.stringify((comp.props.label as string) || "Button")}, custom_id=${JSON.stringify(customId)}, style=discord.ButtonStyle.${(comp.props.style as string) || "primary"})`,
-        `    async def ${fnName}_callback(self, button: discord.ui.Button, interaction: discord.Interaction):`,
-        `        await interaction.response.send_message("Button ${customId} geklickt!", ephemeral=True)`,
-        ""
-      );
+      buttons.push({
+        customId: comp.props.custom_id as string,
+        label: (comp.props.label as string) || "Button",
+        style: (comp.props.style as string) || "primary",
+      });
+    }
+    if (comp.type === "select-menu" && comp.props.custom_id) {
+      selectMenus.push({
+        customId: comp.props.custom_id as string,
+        placeholder: (comp.props.placeholder as string) || "Wähle...",
+        selectType: (comp.props.select_type as string) || "string",
+      });
     }
     if (comp.children) {
-      collectCallbacks(comp.children, callbacks);
+      collectInteractives(comp.children, buttons, selectMenus);
     }
   }
 }
