@@ -33,6 +33,8 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { useState, useEffect } from "react";
+import { createClient } from "@/lib/supabase/client";
+import { useSession } from "next-auth/react";
 
 type BotStatus = "running" | "stopped" | "error";
 
@@ -43,21 +45,6 @@ interface BotProject {
   status: BotStatus;
   deployedAt: string;
   uptime: string | null;
-}
-
-const STORAGE_KEY = "cogsforge:bots";
-
-function loadBots(): BotProject[] {
-  if (typeof window === "undefined") return [];
-  try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]");
-  } catch {
-    return [];
-  }
-}
-
-function saveBots(bots: BotProject[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(bots));
 }
 
 const STATUS_DOT: Record<BotStatus, string> = {
@@ -350,36 +337,77 @@ function NewBotDialog({ onAdd }: { onAdd: (bot: BotProject) => void }) {
 }
 
 export default function ProjectsPage() {
+  const { data: session } = useSession();
+  const userId = session?.user?.id ?? null;
   const [bots, setBots] = useState<BotProject[]>([]);
+  const [loading, setLoading] = useState(true);
+  const db = createClient();
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const fromRow = (r: any): BotProject => ({
+    id: r.id,
+    name: r.name,
+    clientId: r.client_id ?? "",
+    status: r.status as BotStatus,
+    deployedAt: new Date(r.created_at).toLocaleDateString("de-DE"),
+    uptime: r.uptime ?? null,
+  });
 
   useEffect(() => {
-    setBots(loadBots());
-  }, []);
+    if (!userId) { setLoading(false); return; }
+    db.from("bots")
+      .select("*")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .then(({ data }) => {
+        if (data) setBots(data.map(fromRow));
+        setLoading(false);
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
 
-  const update = (next: BotProject[]) => {
-    setBots(next);
-    saveBots(next);
+  const handleAdd = async (bot: BotProject) => {
+    if (!userId) return;
+    const { data, error } = await db.from("bots").insert({
+      user_id: userId,
+      name: bot.name,
+      client_id: bot.clientId,
+      status: "stopped",
+    }).select().single();
+    if (!error && data) setBots((p) => [fromRow(data), ...p]);
   };
 
-  const handleAdd = (bot: BotProject) => update([bot, ...bots]);
+  const handleToggle = async (id: string) => {
+    const bot = bots.find((b) => b.id === id);
+    if (!bot) return;
+    const next = bot.status === "running" ? "stopped" : "running";
+    await db.from("bots").update({ status: next, uptime: next === "stopped" ? null : "0m" }).eq("id", id);
+    setBots((p) => p.map((b) => b.id === id ? { ...b, status: next, uptime: next === "stopped" ? null : "0m" } : b));
+  };
 
-  const handleToggle = (id: string) =>
-    update(
-      bots.map((b) =>
-        b.id === id
-          ? {
-              ...b,
-              status: b.status === "running" ? "stopped" : "running",
-              uptime: b.status === "running" ? null : "0m",
-            }
-          : b
-      )
-    );
-
-  const handleRestart = (id: string) =>
-    update(bots.map((b) => (b.id === id ? { ...b, uptime: "0m" } : b)));
+  const handleRestart = async (id: string) => {
+    await db.from("bots").update({ uptime: "0m" }).eq("id", id);
+    setBots((p) => p.map((b) => b.id === id ? { ...b, uptime: "0m" } : b));
+  };
 
   const running = bots.filter((b) => b.status === "running").length;
+
+  if (loading) {
+    return (
+      <div className="py-8 max-w-5xl mx-auto px-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="rounded-xl border border-border bg-muted/30 px-5 py-4 h-20 animate-pulse" />
+          ))}
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="rounded-xl border border-border h-32 animate-pulse bg-muted/30" />
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="py-8 max-w-5xl mx-auto px-4 space-y-8">
