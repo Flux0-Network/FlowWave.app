@@ -32,7 +32,7 @@ import {
   DialogClose,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 type BotStatus = "running" | "stopped" | "error";
 
@@ -43,6 +43,21 @@ interface BotProject {
   status: BotStatus;
   deployedAt: string;
   uptime: string | null;
+}
+
+const STORAGE_KEY = "cogsforge:bots";
+
+function loadBots(): BotProject[] {
+  if (typeof window === "undefined") return [];
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]");
+  } catch {
+    return [];
+  }
+}
+
+function saveBots(bots: BotProject[]) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(bots));
 }
 
 const STATUS_DOT: Record<BotStatus, string> = {
@@ -337,11 +352,20 @@ function NewBotDialog({ onAdd }: { onAdd: (bot: BotProject) => void }) {
 export default function ProjectsPage() {
   const [bots, setBots] = useState<BotProject[]>([]);
 
-  const handleAdd = (bot: BotProject) => setBots((p) => [bot, ...p]);
+  useEffect(() => {
+    setBots(loadBots());
+  }, []);
+
+  const update = (next: BotProject[]) => {
+    setBots(next);
+    saveBots(next);
+  };
+
+  const handleAdd = (bot: BotProject) => update([bot, ...bots]);
 
   const handleToggle = (id: string) =>
-    setBots((prev) =>
-      prev.map((b) =>
+    update(
+      bots.map((b) =>
         b.id === id
           ? {
               ...b,
@@ -353,9 +377,7 @@ export default function ProjectsPage() {
     );
 
   const handleRestart = (id: string) =>
-    setBots((prev) =>
-      prev.map((b) => (b.id === id ? { ...b, uptime: "0m" } : b))
-    );
+    update(bots.map((b) => (b.id === id ? { ...b, uptime: "0m" } : b)));
 
   const running = bots.filter((b) => b.status === "running").length;
 
