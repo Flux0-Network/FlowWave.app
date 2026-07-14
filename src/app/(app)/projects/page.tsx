@@ -1,8 +1,6 @@
 "use client";
 
-import Link from "next/link";
 import {
-  Blocks,
   Plus,
   Activity,
   Server,
@@ -12,13 +10,13 @@ import {
   Play,
   Terminal,
   FolderOpen,
-  ChevronRight,
   Eye,
   EyeOff,
   Bot,
   Rocket,
+  Trash2,
+  AlertCircle,
 } from "lucide-react";
-import { buttonVariants } from "@/components/ui/button";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -32,7 +30,7 @@ import {
   DialogClose,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 
 type BotStatus = "running" | "stopped" | "error";
 
@@ -41,8 +39,7 @@ interface BotProject {
   name: string;
   clientId: string;
   status: BotStatus;
-  deployedAt: string;
-  uptime: string | null;
+  createdAt: string;
 }
 
 const STORAGE_KEY = "cogsforge:bots";
@@ -60,6 +57,44 @@ function saveBots(bots: BotProject[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(bots));
 }
 
+function formatDate(iso: string) {
+  try {
+    return new Date(iso).toLocaleDateString("de-DE", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    });
+  } catch {
+    return iso;
+  }
+}
+
+function mapDockerStatus(s: string): BotStatus {
+  if (s === "running" || s === "restarting") return "running";
+  if (s === "dead") return "error";
+  return "stopped";
+}
+
+const DEFAULT_BOT_CODE = `import discord
+from discord.ext import commands
+import os
+
+intents = discord.Intents.default()
+intents.message_content = True
+
+bot = commands.Bot(command_prefix='!', intents=intents)
+
+@bot.event
+async def on_ready():
+    print(f'Eingeloggt als {bot.user}')
+
+@bot.command()
+async def ping(ctx):
+    await ctx.send('Pong!')
+
+bot.run(os.environ['DISCORD_TOKEN'])
+`;
+
 const STATUS_DOT: Record<BotStatus, string> = {
   running: "bg-emerald-400",
   stopped: "bg-zinc-500",
@@ -68,12 +103,20 @@ const STATUS_DOT: Record<BotStatus, string> = {
 const STATUS_LABEL: Record<BotStatus, string> = {
   running: "Online",
   stopped: "Offline",
-  error: "Error",
+  error: "Fehler",
 };
 const STATUS_TEXT: Record<BotStatus, string> = {
   running: "text-emerald-400",
   stopped: "text-zinc-400",
   error: "text-red-400",
+};
+
+const ACTION_LABEL: Record<string, string> = {
+  deploying: "Deploying",
+  stopping: "Stopping",
+  starting: "Starting",
+  restarting: "Restarting",
+  deleting: "Deleting",
 };
 
 function StatusDot({ status }: { status: BotStatus }) {
@@ -119,15 +162,97 @@ function StatCard({
   );
 }
 
+function LogsDialog({ botId, botName }: { botId: string; botName: string }) {
+  const [open, setOpen] = useState(false);
+  const [lines, setLines] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval>>();
+
+  const fetchLogs = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/hosting/${botId}/logs`);
+      if (res.ok) {
+        const data = await res.json();
+        setLines(data.logs ?? []);
+        setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
+      }
+    } catch {}
+  }, [botId]);
+
+  useEffect(() => {
+    if (!open) {
+      clearInterval(intervalRef.current);
+      setLines([]);
+      return;
+    }
+    setLoading(true);
+    fetchLogs().finally(() => setLoading(false));
+    intervalRef.current = setInterval(fetchLogs, 3000);
+    return () => clearInterval(intervalRef.current);
+  }, [open, fetchLogs]);
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7 text-muted-foreground hover:text-foreground"
+            title="Logs anzeigen"
+          >
+            <Terminal className="size-3.5" />
+          </Button>
+        }
+      />
+      <DialogContent className="max-w-2xl" showCloseButton>
+        <DialogHeader>
+          <DialogTitle className="font-mono text-sm">{botName} — Logs</DialogTitle>
+          <DialogDescription className="text-[11px]">
+            Letzte 100 Zeilen · Aktualisiert alle 3s
+          </DialogDescription>
+        </DialogHeader>
+        <div className="rounded-lg bg-zinc-950 dark:bg-black border border-border overflow-y-auto max-h-80 p-3 font-mono text-[11px] leading-relaxed">
+          {loading && lines.length === 0 ? (
+            <span className="text-zinc-500">Lade Logs…</span>
+          ) : lines.length === 0 ? (
+            <span className="text-zinc-500">Keine Logs verfügbar.</span>
+          ) : (
+            lines.map((l, i) => (
+              <div key={i} className="text-zinc-300 whitespace-pre-wrap break-all">
+                {l}
+              </div>
+            ))
+          )}
+          <div ref={bottomRef} />
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function BotCard({
   bot,
-  onToggle,
+  actionState,
+  onStart,
+  onStop,
   onRestart,
+  onDelete,
 }: {
   bot: BotProject;
-  onToggle: (id: string) => void;
+  actionState: string;
+  onStart: (id: string) => void;
+  onStop: (id: string) => void;
   onRestart: (id: string) => void;
+  onDelete: (id: string) => void;
 }) {
+  const busy = actionState !== "idle";
+  const statusLabel =
+    busy && ACTION_LABEL[actionState]
+      ? `${ACTION_LABEL[actionState]}…`
+      : STATUS_LABEL[bot.status];
+
   return (
     <div className="rounded-xl border border-border bg-card overflow-hidden">
       <div className="px-4 py-3 flex items-center justify-between gap-2 border-b border-border/60">
@@ -135,8 +260,13 @@ function BotCard({
           <StatusDot status={bot.status} />
           <span className="font-medium text-sm truncate">{bot.name}</span>
         </div>
-        <span className={cn("text-[11px] font-medium shrink-0", STATUS_TEXT[bot.status])}>
-          {STATUS_LABEL[bot.status]}
+        <span
+          className={cn(
+            "text-[11px] font-medium shrink-0",
+            busy ? "text-muted-foreground" : STATUS_TEXT[bot.status]
+          )}
+        >
+          {statusLabel}
         </span>
       </div>
 
@@ -149,12 +279,12 @@ function BotCard({
         )}
         <div className="flex justify-between">
           <span>Erstellt</span>
-          <span className="text-foreground/70">{bot.deployedAt}</span>
+          <span className="text-foreground/70">{formatDate(bot.createdAt)}</span>
         </div>
-        {bot.uptime && (
-          <div className="flex justify-between">
-            <span>Uptime</span>
-            <span className="text-emerald-400">{bot.uptime}</span>
+        {bot.status === "error" && (
+          <div className="flex items-center gap-1.5 text-red-400 pt-0.5">
+            <AlertCircle className="size-3 shrink-0" />
+            <span>Bot abgestürzt oder konnte nicht starten</span>
           </div>
         )}
       </div>
@@ -164,12 +294,19 @@ function BotCard({
           variant="ghost"
           size="sm"
           className="h-7 px-2.5 text-[11px] gap-1 text-muted-foreground hover:text-foreground flex-1"
-          onClick={() => onToggle(bot.id)}
+          onClick={() => (bot.status === "running" ? onStop(bot.id) : onStart(bot.id))}
+          disabled={busy}
         >
           {bot.status === "running" ? (
-            <><Square className="size-3" />Stop</>
+            <>
+              <Square className="size-3" />
+              Stop
+            </>
           ) : (
-            <><Play className="size-3" />Start</>
+            <>
+              <Play className="size-3" />
+              Start
+            </>
           )}
         </Button>
         <Button
@@ -177,38 +314,39 @@ function BotCard({
           size="icon"
           className="size-7 text-muted-foreground hover:text-foreground"
           onClick={() => onRestart(bot.id)}
-          disabled={bot.status !== "running"}
+          disabled={busy || bot.status !== "running"}
+          title="Neu starten"
         >
           <RotateCcw className="size-3.5" />
         </Button>
+        <LogsDialog botId={bot.id} botName={bot.name} />
         <Button
           variant="ghost"
           size="icon"
-          className="size-7 text-muted-foreground hover:text-foreground"
+          className="size-7 text-muted-foreground hover:text-destructive"
+          onClick={() => onDelete(bot.id)}
+          disabled={busy}
+          title="Bot löschen"
         >
-          <Terminal className="size-3.5" />
+          <Trash2 className="size-3.5" />
         </Button>
-        <Link
-          href="/builder"
-          className={cn(
-            buttonVariants({ variant: "ghost", size: "icon" }),
-            "size-7 text-muted-foreground hover:text-foreground"
-          )}
-        >
-          <Blocks className="size-3.5" />
-        </Link>
       </div>
     </div>
   );
 }
 
-function NewBotDialog({ onAdd }: { onAdd: (bot: BotProject) => void }) {
+function NewBotDialog({
+  onDeploy,
+}: {
+  onDeploy: (name: string, clientId: string, token: string) => Promise<void>;
+}) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [token, setToken] = useState("");
   const [clientId, setClientId] = useState("");
   const [showToken, setShowToken] = useState(false);
-  const [errors, setErrors] = useState<{ name?: string; token?: string }>({});
+  const [errors, setErrors] = useState<{ name?: string; token?: string; general?: string }>({});
+  const [deploying, setDeploying] = useState(false);
 
   const validate = () => {
     const e: { name?: string; token?: string } = {};
@@ -218,25 +356,26 @@ function NewBotDialog({ onAdd }: { onAdd: (bot: BotProject) => void }) {
     return Object.keys(e).length === 0;
   };
 
-  const handleSubmit = () => {
-    if (!validate()) return;
-    onAdd({
-      id: crypto.randomUUID(),
-      name: name.trim(),
-      clientId: clientId.trim(),
-      status: "stopped",
-      deployedAt: "Gerade eben",
-      uptime: null,
-    });
-    setName("");
-    setToken("");
-    setClientId("");
+  const handleSubmit = async () => {
+    if (!validate() || deploying) return;
+    setDeploying(true);
     setErrors({});
-    setOpen(false);
+    try {
+      await onDeploy(name.trim(), clientId.trim(), token.trim());
+      setName("");
+      setToken("");
+      setClientId("");
+      setErrors({});
+      setOpen(false);
+    } catch (e: unknown) {
+      setErrors({ general: e instanceof Error ? e.message : "Deploy fehlgeschlagen." });
+    } finally {
+      setDeploying(false);
+    }
   };
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={(v) => { if (!deploying) setOpen(v); }}>
       <DialogTrigger
         render={
           <Button size="sm" className="gap-1.5 shrink-0">
@@ -275,9 +414,7 @@ function NewBotDialog({ onAdd }: { onAdd: (bot: BotProject) => void }) {
               }}
               aria-invalid={!!errors.name}
             />
-            {errors.name && (
-              <p className="text-[11px] text-destructive">{errors.name}</p>
-            )}
+            {errors.name && <p className="text-[11px] text-destructive">{errors.name}</p>}
           </div>
 
           <div className="space-y-1.5">
@@ -308,9 +445,7 @@ function NewBotDialog({ onAdd }: { onAdd: (bot: BotProject) => void }) {
                 {showToken ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
               </button>
             </div>
-            {errors.token && (
-              <p className="text-[11px] text-destructive">{errors.token}</p>
-            )}
+            {errors.token && <p className="text-[11px] text-destructive">{errors.token}</p>}
             <p className="text-[11px] text-muted-foreground">
               Wird verschlüsselt gespeichert und verlässt den Server nie im Klartext.
             </p>
@@ -329,19 +464,35 @@ function NewBotDialog({ onAdd }: { onAdd: (bot: BotProject) => void }) {
               className="font-mono text-[12px]"
             />
           </div>
+
+          {errors.general && (
+            <div className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2">
+              <AlertCircle className="size-3.5 text-destructive shrink-0" />
+              <p className="text-[11px] text-destructive">{errors.general}</p>
+            </div>
+          )}
         </div>
 
         <div className="-mx-4 -mb-4 flex items-center justify-end gap-2 rounded-b-xl border-t bg-muted/50 px-4 py-3">
           <DialogClose
             render={
-              <Button variant="ghost" size="sm">
+              <Button variant="ghost" size="sm" disabled={deploying}>
                 Abbrechen
               </Button>
             }
           />
-          <Button size="sm" className="gap-1.5" onClick={handleSubmit}>
-            <Rocket className="size-3.5" />
-            Bot erstellen
+          <Button size="sm" className="gap-1.5" onClick={handleSubmit} disabled={deploying}>
+            {deploying ? (
+              <>
+                <RotateCcw className="size-3.5 animate-spin" />
+                Deploying…
+              </>
+            ) : (
+              <>
+                <Rocket className="size-3.5" />
+                Bot erstellen
+              </>
+            )}
           </Button>
         </div>
       </DialogContent>
@@ -350,34 +501,130 @@ function NewBotDialog({ onAdd }: { onAdd: (bot: BotProject) => void }) {
 }
 
 export default function ProjectsPage() {
-  const [bots, setBots] = useState<BotProject[]>([]);
+  const [bots, _setBots] = useState<BotProject[]>([]);
+  const [actionStates, setActionStates] = useState<Record<string, string>>({});
+  const botsRef = useRef<BotProject[]>([]);
 
-  useEffect(() => {
-    setBots(loadBots());
+  const update = useCallback((next: BotProject[]) => {
+    botsRef.current = next;
+    _setBots(next);
+    saveBots(next);
   }, []);
 
-  const update = (next: BotProject[]) => {
-    setBots(next);
-    saveBots(next);
+  const setAction = (id: string, action: string) =>
+    setActionStates((prev) => ({ ...prev, [id]: action }));
+
+  useEffect(() => {
+    const loaded = loadBots();
+    botsRef.current = loaded;
+    _setBots(loaded);
+  }, []);
+
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      const running = botsRef.current.filter((b) => b.status === "running");
+      if (running.length === 0) return;
+      const results = await Promise.all(
+        running.map(async (b) => {
+          try {
+            const res = await fetch(`/api/hosting/${b.id}`);
+            if (!res.ok) return null;
+            const data = await res.json();
+            return { id: b.id, status: mapDockerStatus(data.status) };
+          } catch {
+            return null;
+          }
+        })
+      );
+      const changes = results.filter(Boolean) as { id: string; status: BotStatus }[];
+      const needsUpdate = changes.some(({ id, status }) => {
+        const bot = botsRef.current.find((b) => b.id === id);
+        return bot && bot.status !== status;
+      });
+      if (needsUpdate) {
+        const next = botsRef.current.map((b) => {
+          const c = changes.find((x) => x.id === b.id);
+          return c ? { ...b, status: c.status } : b;
+        });
+        update(next);
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [update]);
+
+  const handleDeploy = async (name: string, clientId: string, token: string) => {
+    const id = crypto.randomUUID();
+    const bot: BotProject = {
+      id,
+      name,
+      clientId,
+      status: "stopped",
+      createdAt: new Date().toISOString(),
+    };
+    update([bot, ...botsRef.current]);
+    setAction(id, "deploying");
+    try {
+      const res = await fetch("/api/hosting/deploy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bot_id: id, code: DEFAULT_BOT_CODE, token }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail ?? "Deploy fehlgeschlagen.");
+      }
+      update(botsRef.current.map((b) => (b.id === id ? { ...b, status: "running" } : b)));
+    } catch (e) {
+      update(botsRef.current.filter((b) => b.id !== id));
+      throw e;
+    } finally {
+      setAction(id, "idle");
+    }
   };
 
-  const handleAdd = (bot: BotProject) => update([bot, ...bots]);
+  const handleStart = async (id: string) => {
+    setAction(id, "starting");
+    try {
+      const res = await fetch(`/api/hosting/${id}/start`, { method: "POST" });
+      const status: BotStatus = res.ok ? "running" : "error";
+      update(botsRef.current.map((b) => (b.id === id ? { ...b, status } : b)));
+    } catch {
+      update(botsRef.current.map((b) => (b.id === id ? { ...b, status: "error" } : b)));
+    } finally {
+      setAction(id, "idle");
+    }
+  };
 
-  const handleToggle = (id: string) =>
-    update(
-      bots.map((b) =>
-        b.id === id
-          ? {
-              ...b,
-              status: b.status === "running" ? "stopped" : "running",
-              uptime: b.status === "running" ? null : "0m",
-            }
-          : b
-      )
-    );
+  const handleStop = async (id: string) => {
+    setAction(id, "stopping");
+    try {
+      const res = await fetch(`/api/hosting/${id}/stop`, { method: "POST" });
+      if (res.ok) {
+        update(botsRef.current.map((b) => (b.id === id ? { ...b, status: "stopped" } : b)));
+      }
+    } finally {
+      setAction(id, "idle");
+    }
+  };
 
-  const handleRestart = (id: string) =>
-    update(bots.map((b) => (b.id === id ? { ...b, uptime: "0m" } : b)));
+  const handleRestart = async (id: string) => {
+    setAction(id, "restarting");
+    try {
+      await fetch(`/api/hosting/${id}/restart`, { method: "POST" });
+    } finally {
+      setAction(id, "idle");
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    setAction(id, "deleting");
+    try {
+      await fetch(`/api/hosting/${id}`, { method: "DELETE" });
+    } finally {
+      update(botsRef.current.filter((b) => b.id !== id));
+      setAction(id, "idle");
+    }
+  };
 
   const running = bots.filter((b) => b.status === "running").length;
 
@@ -390,7 +637,7 @@ export default function ProjectsPage() {
             Deine Bots und Projekte auf einen Blick.
           </p>
         </div>
-        <NewBotDialog onAdd={handleAdd} />
+        <NewBotDialog onDeploy={handleDeploy} />
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -433,17 +680,7 @@ export default function ProjectsPage() {
                 Klicke auf „Neues Projekt“ um deinen Bot zu verbinden und direkt zu hosten.
               </p>
             </div>
-            <div className="flex flex-wrap justify-center gap-2">
-              <NewBotDialog onAdd={handleAdd} />
-              <Link
-                href="/builder"
-                className={cn(buttonVariants({ variant: "outline", size: "sm" }), "gap-1.5")}
-              >
-                <Blocks className="size-3.5" />
-                Zum Builder
-                <ChevronRight className="size-3.5" />
-              </Link>
-            </div>
+            <NewBotDialog onDeploy={handleDeploy} />
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -451,8 +688,11 @@ export default function ProjectsPage() {
               <BotCard
                 key={bot.id}
                 bot={bot}
-                onToggle={handleToggle}
+                actionState={actionStates[bot.id] ?? "idle"}
+                onStart={handleStart}
+                onStop={handleStop}
                 onRestart={handleRestart}
+                onDelete={handleDelete}
               />
             ))}
           </div>

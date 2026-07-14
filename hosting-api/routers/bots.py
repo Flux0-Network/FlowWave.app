@@ -1,7 +1,15 @@
 import os
 from fastapi import APIRouter, HTTPException, Header, Depends
 from pydantic import BaseModel
-from services.docker_manager import deploy_bot, stop_bot, restart_bot, get_status
+from services.docker_manager import (
+    deploy_bot,
+    stop_bot,
+    start_bot,
+    delete_bot,
+    restart_bot,
+    get_status,
+    get_logs,
+)
 
 router = APIRouter()
 
@@ -29,9 +37,27 @@ async def deploy(req: DeployRequest):
 
 
 @router.delete("/{bot_id}", dependencies=[Depends(_auth)])
+async def delete(bot_id: str):
+    delete_bot(bot_id)
+    return {"bot_id": bot_id, "status": "deleted"}
+
+
+@router.post("/{bot_id}/stop", dependencies=[Depends(_auth)])
 async def stop(bot_id: str):
-    stop_bot(bot_id)
-    return {"bot_id": bot_id, "status": "stopped"}
+    try:
+        stop_bot(bot_id)
+        return {"bot_id": bot_id, "status": "stopped"}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/{bot_id}/start", dependencies=[Depends(_auth)])
+async def start(bot_id: str):
+    try:
+        start_bot(bot_id)
+        return {"bot_id": bot_id, "status": "running"}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.post("/{bot_id}/restart", dependencies=[Depends(_auth)])
@@ -46,3 +72,8 @@ async def restart(bot_id: str):
 @router.get("/{bot_id}/status", dependencies=[Depends(_auth)])
 async def status(bot_id: str):
     return {"bot_id": bot_id, "status": get_status(bot_id)}
+
+
+@router.get("/{bot_id}/logs", dependencies=[Depends(_auth)])
+async def logs(bot_id: str, tail: int = 100):
+    return {"bot_id": bot_id, "logs": get_logs(bot_id, tail=tail)}

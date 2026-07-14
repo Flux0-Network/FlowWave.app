@@ -27,7 +27,7 @@ def deploy_bot(bot_id: str, code: str, token: str) -> str:
             forcerm=True,
         )
 
-        _stop_container(bot_id)
+        _remove_container(bot_id)
 
         container = _client.containers.run(
             f"cogsforge-bot:{bot_id}",
@@ -43,7 +43,7 @@ def deploy_bot(bot_id: str, code: str, token: str) -> str:
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
-def _stop_container(bot_id: str) -> None:
+def _remove_container(bot_id: str) -> None:
     try:
         c = _client.containers.get(f"bot_{bot_id}")
         c.stop(timeout=5)
@@ -53,7 +53,24 @@ def _stop_container(bot_id: str) -> None:
 
 
 def stop_bot(bot_id: str) -> None:
-    _stop_container(bot_id)
+    """Stop the container but keep it (and its image) so it can be restarted without re-deploying."""
+    try:
+        _client.containers.get(f"bot_{bot_id}").stop(timeout=5)
+    except docker.errors.NotFound:
+        raise ValueError(f"Bot {bot_id} not found")
+
+
+def start_bot(bot_id: str) -> None:
+    """Start a previously stopped container."""
+    try:
+        _client.containers.get(f"bot_{bot_id}").start()
+    except docker.errors.NotFound:
+        raise ValueError(f"Bot {bot_id} not found — redeploy required")
+
+
+def delete_bot(bot_id: str) -> None:
+    """Fully remove the container and image."""
+    _remove_container(bot_id)
     try:
         _client.images.remove(f"cogsforge-bot:{bot_id}", force=True)
     except docker.errors.ImageNotFound:
@@ -72,6 +89,15 @@ def get_status(bot_id: str) -> str:
         return _client.containers.get(f"bot_{bot_id}").status
     except docker.errors.NotFound:
         return "stopped"
+
+
+def get_logs(bot_id: str, tail: int = 100) -> list[str]:
+    try:
+        container = _client.containers.get(f"bot_{bot_id}")
+        raw = container.logs(stream=False, timestamps=True, tail=tail)
+        return raw.decode("utf-8", errors="replace").splitlines()
+    except docker.errors.NotFound:
+        return []
 
 
 def stream_logs(bot_id: str, tail: int = 50):
