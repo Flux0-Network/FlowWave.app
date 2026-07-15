@@ -167,7 +167,7 @@ function LogsDialog({ botId, botName }: { botId: string; botName: string }) {
   const [lines, setLines] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const intervalRef = useRef<ReturnType<typeof setInterval>>();
+  const intervalRef = useRef<ReturnType<typeof setInterval>>(undefined);
 
   const fetchLogs = useCallback(async () => {
     try {
