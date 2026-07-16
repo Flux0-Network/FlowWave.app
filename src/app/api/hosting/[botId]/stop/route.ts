@@ -5,9 +5,13 @@ const API_SECRET = process.env.HOSTING_API_SECRET ?? "";
 
 export async function POST(_req: NextRequest, { params }: { params: Promise<{ botId: string }> }) {
   const { botId } = await params;
-  const res = await fetch(`${API_URL}/bots/${botId}/stop`, {
-    method: "POST",
-    headers: { "x-api-secret": API_SECRET },
-  });
-  return NextResponse.json(await res.json(), { status: res.status });
+  try {
+    const res = await fetch(`${API_URL}/bots/${botId}/stop`, {
+      method: "POST",
+      headers: { "x-api-secret": API_SECRET },
+    });
+    return NextResponse.json(await res.json(), { status: res.status });
+  } catch {
+    return NextResponse.json({ detail: "Hosting-API nicht erreichbar." }, { status: 503 });
+  }
 }

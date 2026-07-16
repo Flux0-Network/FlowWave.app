@@ -9,8 +9,12 @@ export async function GET(
 ) {
   const { botId } = await params;
   const tail = req.nextUrl.searchParams.get("tail") ?? "100";
-  const res = await fetch(`${API_URL}/bots/${botId}/logs?tail=${tail}`, {
-    headers: { "x-api-secret": API_SECRET },
-  });
-  return NextResponse.json(await res.json(), { status: res.status });
+  try {
+    const res = await fetch(`${API_URL}/bots/${botId}/logs?tail=${tail}`, {
+      headers: { "x-api-secret": API_SECRET },
+    });
+    return NextResponse.json(await res.json(), { status: res.status });
+  } catch {
+    return NextResponse.json({ logs: [] }, { status: 200 });
+  }
 }
