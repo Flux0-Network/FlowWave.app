@@ -10,10 +10,7 @@ import {
   Play,
   Terminal,
   FolderOpen,
-  Eye,
-  EyeOff,
   Bot,
-  Rocket,
   Trash2,
   AlertCircle,
   Code2,
@@ -30,8 +27,10 @@ import {
   DialogTrigger,
   DialogClose,
 } from "@/components/ui/dialog";
+// Label/DialogDescription/DialogClose used in NewBotDialog
 import { cn } from "@/lib/utils";
 import { useState, useEffect, useRef, useCallback } from "react";
+import Link from "next/link";
 
 type BotStatus = "running" | "stopped" | "error";
 
@@ -234,134 +233,6 @@ function LogsDialog({ botId, botName }: { botId: string; botName: string }) {
   );
 }
 
-function CodeEditorDialog({
-  bot,
-  onSave,
-  onDeploy,
-  busy,
-}: {
-  bot: BotProject;
-  onSave: (id: string, code: string) => void;
-  onDeploy: (id: string, code: string, token: string) => Promise<void>;
-  busy: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const [code, setCode] = useState(bot.code);
-  const [token, setToken] = useState("");
-  const [showToken, setShowToken] = useState(false);
-  const [deploying, setDeploying] = useState(false);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    if (open) setCode(bot.code);
-  }, [open, bot.code]);
-
-  const handleDeploy = async () => {
-    if (!token.trim()) { setError("Token erforderlich."); return; }
-    setDeploying(true);
-    setError("");
-    try {
-      await onDeploy(bot.id, code, token.trim());
-      setToken("");
-      setOpen(false);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Deploy fehlgeschlagen.");
-    } finally {
-      setDeploying(false);
-    }
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger
-        render={
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-7 text-muted-foreground hover:text-foreground"
-            title="Code bearbeiten"
-          >
-            <Code2 className="size-3.5" />
-          </Button>
-        }
-      />
-      <DialogContent className="max-w-3xl" showCloseButton>
-        <DialogHeader>
-          <DialogTitle className="font-mono text-sm">{bot.name} — bot.py</DialogTitle>
-          <DialogDescription className="text-[11px]">
-            Bearbeite deinen Bot-Code und deploye ihn direkt.
-          </DialogDescription>
-        </DialogHeader>
-
-        <textarea
-          value={code}
-          onChange={(e) => setCode(e.target.value)}
-          className="w-full h-72 font-mono text-[12px] leading-relaxed bg-zinc-950 dark:bg-black text-zinc-200 p-4 rounded-lg border border-border resize-none focus:outline-none focus:ring-1 focus:ring-primary/60"
-          spellCheck={false}
-        />
-
-        <div className="space-y-3">
-          <div className="space-y-1.5">
-            <Label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
-              Bot Token — für Deploy
-            </Label>
-            <div className="relative">
-              <Input
-                type={showToken ? "text" : "password"}
-                placeholder="MTxxxxxx.Gxxxxx.xxxxxxxxxx"
-                value={token}
-                onChange={(e) => { setToken(e.target.value); setError(""); }}
-                className="pr-9 font-mono text-[12px]"
-              />
-              <button
-                type="button"
-                onClick={() => setShowToken((v) => !v)}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-              >
-                {showToken ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
-              </button>
-            </div>
-          </div>
-
-          {error && (
-            <div className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2">
-              <AlertCircle className="size-3.5 text-destructive shrink-0" />
-              <p className="text-[11px] text-destructive">{error}</p>
-            </div>
-          )}
-
-          <div className="flex items-center justify-end gap-2 pt-1">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => { onSave(bot.id, code); setOpen(false); }}
-            >
-              Speichern
-            </Button>
-            <Button
-              size="sm"
-              className="gap-1.5"
-              onClick={handleDeploy}
-              disabled={deploying || busy}
-            >
-              {deploying ? (
-                <>
-                  <RotateCcw className="size-3.5 animate-spin" />
-                  Deploying…
-                </>
-              ) : (
-                <>
-                  <Rocket className="size-3.5" />
-                  Deployen
-                </>
-              )}
-            </Button>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
 
 function BotCard({
   bot,
@@ -379,8 +250,6 @@ function BotCard({
   onStop: (id: string) => void;
   onRestart: (id: string) => void;
   onDelete: (id: string) => void;
-  onSaveCode: (id: string, code: string) => void;
-  onDeploy: (id: string, code: string, token: string) => Promise<void>;
 }) {
   const busy = actionState !== "idle";
   const statusLabel =
@@ -454,12 +323,16 @@ function BotCard({
         >
           <RotateCcw className="size-3.5" />
         </Button>
-        <CodeEditorDialog
-          bot={bot}
-          onSave={onSaveCode}
-          onDeploy={onDeploy}
-          busy={busy}
-        />
+        <Link href={`/projects/${bot.id}`}>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7 text-muted-foreground hover:text-foreground"
+            title="Code bearbeiten"
+          >
+            <Code2 className="size-3.5" />
+          </Button>
+        </Link>
         <LogsDialog botId={bot.id} botName={bot.name} />
         <Button
           variant="ghost"
@@ -630,28 +503,6 @@ export default function ProjectsPage() {
     update([bot, ...botsRef.current]);
   };
 
-  const handleSaveCode = (id: string, code: string) => {
-    update(botsRef.current.map((b) => (b.id === id ? { ...b, code } : b)));
-  };
-
-  const handleDeploy = async (id: string, code: string, token: string) => {
-    setAction(id, "deploying");
-    try {
-      const res = await fetch("/api/hosting/deploy", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bot_id: id, code, token }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail ?? "Deploy fehlgeschlagen.");
-      }
-      update(botsRef.current.map((b) => (b.id === id ? { ...b, status: "running" } : b)));
-    } finally {
-      setAction(id, "idle");
-    }
-  };
-
   const handleStart = async (id: string) => {
     setAction(id, "starting");
     try {
@@ -763,8 +614,6 @@ export default function ProjectsPage() {
                 onStop={handleStop}
                 onRestart={handleRestart}
                 onDelete={handleDelete}
-                onSaveCode={handleSaveCode}
-                onDeploy={handleDeploy}
               />
             ))}
           </div>
