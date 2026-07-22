@@ -16,6 +16,7 @@ import {
   Rocket,
   Trash2,
   AlertCircle,
+  Code2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -40,6 +41,7 @@ interface BotProject {
   clientId: string;
   status: BotStatus;
   createdAt: string;
+  code: string;
 }
 
 const STORAGE_KEY = "cogsforge:bots";
@@ -232,6 +234,135 @@ function LogsDialog({ botId, botName }: { botId: string; botName: string }) {
   );
 }
 
+function CodeEditorDialog({
+  bot,
+  onSave,
+  onDeploy,
+  busy,
+}: {
+  bot: BotProject;
+  onSave: (id: string, code: string) => void;
+  onDeploy: (id: string, code: string, token: string) => Promise<void>;
+  busy: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [code, setCode] = useState(bot.code);
+  const [token, setToken] = useState("");
+  const [showToken, setShowToken] = useState(false);
+  const [deploying, setDeploying] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (open) setCode(bot.code);
+  }, [open, bot.code]);
+
+  const handleDeploy = async () => {
+    if (!token.trim()) { setError("Token erforderlich."); return; }
+    setDeploying(true);
+    setError("");
+    try {
+      await onDeploy(bot.id, code, token.trim());
+      setToken("");
+      setOpen(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Deploy fehlgeschlagen.");
+    } finally {
+      setDeploying(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7 text-muted-foreground hover:text-foreground"
+            title="Code bearbeiten"
+          >
+            <Code2 className="size-3.5" />
+          </Button>
+        }
+      />
+      <DialogContent className="max-w-3xl" showCloseButton>
+        <DialogHeader>
+          <DialogTitle className="font-mono text-sm">{bot.name} — bot.py</DialogTitle>
+          <DialogDescription className="text-[11px]">
+            Bearbeite deinen Bot-Code und deploye ihn direkt.
+          </DialogDescription>
+        </DialogHeader>
+
+        <textarea
+          value={code}
+          onChange={(e) => setCode(e.target.value)}
+          className="w-full h-72 font-mono text-[12px] leading-relaxed bg-zinc-950 dark:bg-black text-zinc-200 p-4 rounded-lg border border-border resize-none focus:outline-none focus:ring-1 focus:ring-primary/60"
+          spellCheck={false}
+        />
+
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
+              Bot Token — für Deploy
+            </Label>
+            <div className="relative">
+              <Input
+                type={showToken ? "text" : "password"}
+                placeholder="MTxxxxxx.Gxxxxx.xxxxxxxxxx"
+                value={token}
+                onChange={(e) => { setToken(e.target.value); setError(""); }}
+                className="pr-9 font-mono text-[12px]"
+              />
+              <button
+                type="button"
+                onClick={() => setShowToken((v) => !v)}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+              >
+                {showToken ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+              </button>
+            </div>
+          </div>
+
+          {error && (
+            <div className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2">
+              <AlertCircle className="size-3.5 text-destructive shrink-0" />
+              <p className="text-[11px] text-destructive">{error}</p>
+            </div>
+          )}
+
+          <div className="flex items-center justify-end gap-2 pt-1">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => { onSave(bot.id, code); setOpen(false); }}
+            >
+              Speichern
+            </Button>
+            <Button
+              size="sm"
+              className="gap-1.5"
+              onClick={handleDeploy}
+              disabled={deploying || busy}
+            >
+              {deploying ? (
+                <>
+                  <RotateCcw className="size-3.5 animate-spin" />
+                  Deploying…
+                </>
+              ) : (
+                <>
+                  <Rocket className="size-3.5" />
+                  Deployen
+                </>
+              )}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function BotCard({
   bot,
   actionState,
@@ -239,6 +370,8 @@ function BotCard({
   onStop,
   onRestart,
   onDelete,
+  onSaveCode,
+  onDeploy,
 }: {
   bot: BotProject;
   actionState: string;
@@ -246,6 +379,8 @@ function BotCard({
   onStop: (id: string) => void;
   onRestart: (id: string) => void;
   onDelete: (id: string) => void;
+  onSaveCode: (id: string, code: string) => void;
+  onDeploy: (id: string, code: string, token: string) => Promise<void>;
 }) {
   const busy = actionState !== "idle";
   const statusLabel =
@@ -295,7 +430,7 @@ function BotCard({
           size="sm"
           className="h-7 px-2.5 text-[11px] gap-1 text-muted-foreground hover:text-foreground flex-1"
           onClick={() => (bot.status === "running" ? onStop(bot.id) : onStart(bot.id))}
-          disabled={busy}
+          disabled={busy || bot.status === "stopped"}
         >
           {bot.status === "running" ? (
             <>
@@ -319,6 +454,12 @@ function BotCard({
         >
           <RotateCcw className="size-3.5" />
         </Button>
+        <CodeEditorDialog
+          bot={bot}
+          onSave={onSaveCode}
+          onDeploy={onDeploy}
+          busy={busy}
+        />
         <LogsDialog botId={bot.id} botName={bot.name} />
         <Button
           variant="ghost"
@@ -335,47 +476,25 @@ function BotCard({
   );
 }
 
-function NewBotDialog({
-  onDeploy,
-}: {
-  onDeploy: (name: string, clientId: string, token: string) => Promise<void>;
-}) {
+function NewBotDialog({ onAdd }: { onAdd: (name: string, clientId: string) => void }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
-  const [token, setToken] = useState("");
   const [clientId, setClientId] = useState("");
-  const [showToken, setShowToken] = useState(false);
-  const [errors, setErrors] = useState<{ name?: string; token?: string; general?: string }>({});
-  const [deploying, setDeploying] = useState(false);
+  const [errors, setErrors] = useState<{ name?: string }>({});
 
-  const validate = () => {
-    const e: { name?: string; token?: string } = {};
+  const handleSubmit = () => {
+    const e: { name?: string } = {};
     if (!name.trim() || name.trim().length < 2) e.name = "Mindestens 2 Zeichen.";
-    if (!token.trim()) e.token = "Token ist erforderlich.";
     setErrors(e);
-    return Object.keys(e).length === 0;
-  };
-
-  const handleSubmit = async () => {
-    if (!validate() || deploying) return;
-    setDeploying(true);
-    setErrors({});
-    try {
-      await onDeploy(name.trim(), clientId.trim(), token.trim());
-      setName("");
-      setToken("");
-      setClientId("");
-      setErrors({});
-      setOpen(false);
-    } catch (e: unknown) {
-      setErrors({ general: e instanceof Error ? e.message : "Deploy fehlgeschlagen." });
-    } finally {
-      setDeploying(false);
-    }
+    if (Object.keys(e).length > 0) return;
+    onAdd(name.trim(), clientId.trim());
+    setName("");
+    setClientId("");
+    setOpen(false);
   };
 
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (!deploying) setOpen(v); }}>
+    <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger
         render={
           <Button size="sm" className="gap-1.5 shrink-0">
@@ -393,7 +512,7 @@ function NewBotDialog({
             <div>
               <DialogTitle>Neuer Discord Bot</DialogTitle>
               <DialogDescription className="mt-0.5">
-                Verbinde deinen Bot und deploye ihn mit einem Klick.
+                Füge deinen Bot hinzu und bearbeite den Code im Editor.
               </DialogDescription>
             </div>
           </div>
@@ -410,45 +529,11 @@ function NewBotDialog({
               value={name}
               onChange={(e) => {
                 setName(e.target.value);
-                if (errors.name) setErrors((p) => ({ ...p, name: undefined }));
+                if (errors.name) setErrors({});
               }}
               aria-invalid={!!errors.name}
             />
             {errors.name && <p className="text-[11px] text-destructive">{errors.name}</p>}
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="bot-token" className="text-[12px] font-medium">
-              Bot Token
-              <span className="ml-1.5 text-muted-foreground font-normal">
-                (Discord Developer Portal)
-              </span>
-            </Label>
-            <div className="relative">
-              <Input
-                id="bot-token"
-                type={showToken ? "text" : "password"}
-                placeholder="MTxxxxxx.Gxxxxx.xxxxxxxxxx"
-                value={token}
-                onChange={(e) => {
-                  setToken(e.target.value);
-                  if (errors.token) setErrors((p) => ({ ...p, token: undefined }));
-                }}
-                className="pr-9 font-mono text-[12px]"
-                aria-invalid={!!errors.token}
-              />
-              <button
-                type="button"
-                onClick={() => setShowToken((v) => !v)}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-              >
-                {showToken ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
-              </button>
-            </div>
-            {errors.token && <p className="text-[11px] text-destructive">{errors.token}</p>}
-            <p className="text-[11px] text-muted-foreground">
-              Wird verschlüsselt gespeichert und verlässt den Server nie im Klartext.
-            </p>
           </div>
 
           <div className="space-y-1.5">
@@ -464,35 +549,13 @@ function NewBotDialog({
               className="font-mono text-[12px]"
             />
           </div>
-
-          {errors.general && (
-            <div className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2">
-              <AlertCircle className="size-3.5 text-destructive shrink-0" />
-              <p className="text-[11px] text-destructive">{errors.general}</p>
-            </div>
-          )}
         </div>
 
         <div className="-mx-4 -mb-4 flex items-center justify-end gap-2 rounded-b-xl border-t bg-muted/50 px-4 py-3">
-          <DialogClose
-            render={
-              <Button variant="ghost" size="sm" disabled={deploying}>
-                Abbrechen
-              </Button>
-            }
-          />
-          <Button size="sm" className="gap-1.5" onClick={handleSubmit} disabled={deploying}>
-            {deploying ? (
-              <>
-                <RotateCcw className="size-3.5 animate-spin" />
-                Deploying…
-              </>
-            ) : (
-              <>
-                <Rocket className="size-3.5" />
-                Bot erstellen
-              </>
-            )}
+          <DialogClose render={<Button variant="ghost" size="sm">Abbrechen</Button>} />
+          <Button size="sm" className="gap-1.5" onClick={handleSubmit}>
+            <Bot className="size-3.5" />
+            Bot hinzufügen
           </Button>
         </div>
       </DialogContent>
@@ -515,7 +578,10 @@ export default function ProjectsPage() {
     setActionStates((prev) => ({ ...prev, [id]: action }));
 
   useEffect(() => {
-    const loaded = loadBots();
+    const loaded = loadBots().map((b) => ({
+      ...b,
+      code: b.code ?? DEFAULT_BOT_CODE,
+    }));
     botsRef.current = loaded;
     _setBots(loaded);
   }, []);
@@ -552,31 +618,35 @@ export default function ProjectsPage() {
     return () => clearInterval(interval);
   }, [update]);
 
-  const handleDeploy = async (name: string, clientId: string, token: string) => {
-    const id = crypto.randomUUID();
+  const handleAdd = (name: string, clientId: string) => {
     const bot: BotProject = {
-      id,
+      id: crypto.randomUUID(),
       name,
       clientId,
       status: "stopped",
       createdAt: new Date().toISOString(),
+      code: DEFAULT_BOT_CODE,
     };
     update([bot, ...botsRef.current]);
+  };
+
+  const handleSaveCode = (id: string, code: string) => {
+    update(botsRef.current.map((b) => (b.id === id ? { ...b, code } : b)));
+  };
+
+  const handleDeploy = async (id: string, code: string, token: string) => {
     setAction(id, "deploying");
     try {
       const res = await fetch("/api/hosting/deploy", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bot_id: id, code: DEFAULT_BOT_CODE, token }),
+        body: JSON.stringify({ bot_id: id, code, token }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail ?? "Deploy fehlgeschlagen.");
       }
       update(botsRef.current.map((b) => (b.id === id ? { ...b, status: "running" } : b)));
-    } catch (e) {
-      update(botsRef.current.filter((b) => b.id !== id));
-      throw e;
     } finally {
       setAction(id, "idle");
     }
@@ -637,7 +707,7 @@ export default function ProjectsPage() {
             Deine Bots und Projekte auf einen Blick.
           </p>
         </div>
-        <NewBotDialog onDeploy={handleDeploy} />
+        <NewBotDialog onAdd={handleAdd} />
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -677,10 +747,10 @@ export default function ProjectsPage() {
             <div className="space-y-1.5 max-w-sm">
               <h2 className="font-semibold">Noch kein Bot erstellt</h2>
               <p className="text-sm text-muted-foreground">
-                Klicke auf „Neues Projekt“ um deinen Bot zu verbinden und direkt zu hosten.
+                Klicke auf „Neues Projekt" um deinen Bot hinzuzufügen und den Code im Editor zu bearbeiten.
               </p>
             </div>
-            <NewBotDialog onDeploy={handleDeploy} />
+            <NewBotDialog onAdd={handleAdd} />
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -693,6 +763,8 @@ export default function ProjectsPage() {
                 onStop={handleStop}
                 onRestart={handleRestart}
                 onDelete={handleDelete}
+                onSaveCode={handleSaveCode}
+                onDeploy={handleDeploy}
               />
             ))}
           </div>
