@@ -241,8 +241,6 @@ function BotCard({
   onStop,
   onRestart,
   onDelete,
-  onSaveCode,
-  onDeploy,
 }: {
   bot: BotProject;
   actionState: string;
