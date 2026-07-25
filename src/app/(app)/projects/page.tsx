@@ -250,6 +250,8 @@ function BotCard({
   onStop: (id: string) => void;
   onRestart: (id: string) => void;
   onDelete: (id: string) => void;
+  onSaveCode?: (id: string, code: string) => void;
+  onDeploy?: (id: string) => void;
 }) {
   const busy = actionState !== "idle";
   const statusLabel =
