@@ -261,20 +261,18 @@ function BotCard({
 
   return (
     <div className="rounded-xl border border-border bg-card overflow-hidden">
-      <div className="px-4 py-3 flex items-center justify-between gap-2 border-b border-border/60">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <StatusDot status={bot.status} />
-          <span className="font-medium text-sm truncate">{bot.name}</span>
+      {/* Clickable header → project page */}
+      <Link href={`/projects/${bot.id}`} className="block px-4 py-3 border-b border-border/60 hover:bg-accent/30 transition-colors">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <StatusDot status={bot.status} />
+            <span className="font-medium text-sm truncate">{bot.name}</span>
+          </div>
+          <span className={cn("text-[11px] font-medium shrink-0", busy ? "text-muted-foreground" : STATUS_TEXT[bot.status])}>
+            {statusLabel}
+          </span>
         </div>
-        <span
-          className={cn(
-            "text-[11px] font-medium shrink-0",
-            busy ? "text-muted-foreground" : STATUS_TEXT[bot.status]
-          )}
-        >
-          {statusLabel}
-        </span>
-      </div>
+      </Link>
 
       <div className="px-4 py-3 text-[11px] text-muted-foreground space-y-1">
         {bot.clientId && (
@@ -303,21 +301,10 @@ function BotCard({
           onClick={() => (bot.status === "running" ? onStop(bot.id) : onStart(bot.id))}
           disabled={busy || bot.status === "stopped"}
         >
-          {bot.status === "running" ? (
-            <>
-              <Square className="size-3" />
-              Stop
-            </>
-          ) : (
-            <>
-              <Play className="size-3" />
-              Start
-            </>
-          )}
+          {bot.status === "running" ? <><Square className="size-3" />Stop</> : <><Play className="size-3" />Start</>}
         </Button>
         <Button
-          variant="ghost"
-          size="icon"
+          variant="ghost" size="icon"
           className="size-7 text-muted-foreground hover:text-foreground"
           onClick={() => onRestart(bot.id)}
           disabled={busy || bot.status !== "running"}
@@ -325,20 +312,14 @@ function BotCard({
         >
           <RotateCcw className="size-3.5" />
         </Button>
-        <Link href={`/projects/${bot.id}`}>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-7 text-muted-foreground hover:text-foreground"
-            title="Code bearbeiten"
-          >
+        <Link href={`/projects/${bot.id}/editor`}>
+          <Button variant="ghost" size="icon" className="size-7 text-muted-foreground hover:text-foreground" title="Code Editor">
             <Code2 className="size-3.5" />
           </Button>
         </Link>
         <LogsDialog botId={bot.id} botName={bot.name} />
         <Button
-          variant="ghost"
-          size="icon"
+          variant="ghost" size="icon"
           className="size-7 text-muted-foreground hover:text-destructive"
           onClick={() => onDelete(bot.id)}
           disabled={busy}

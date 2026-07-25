@@ -1,538 +1,930 @@
 "use client";
 
-import { use, useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { use, useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import {
-  ChevronRight, ChevronDown, FolderOpen, FileCode, ArrowLeft, Rocket, Save,
-  Eye, EyeOff, RotateCcw, AlertCircle, CheckCircle2, Plus, Trash2, Pencil,
-  Check, X,
+  ArrowLeft, Play, Square, RotateCcw, Rocket, Code2, Terminal,
+  Database, Settings, Activity, Clock, AlertCircle, CheckCircle2,
+  ChevronRight, Table2, Search, RefreshCw, Plug, Trash2,
+  ChevronLeft, ChevronRight as ChevronRightIcon, X, Eye, EyeOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
-import Link from "next/link";
 
-// ── Tokenizer (One Dark) ─────────────────────────────────────────────────────
-type Token = { text: string; cls: string | null };
-
-const KEYWORDS = new Set([
-  "import","from","class","def","async","await","return","if","else","elif",
-  "for","while","in","not","and","or","True","False","None","pass","break",
-  "continue","try","except","finally","with","as","raise","yield","lambda","self",
-  "is","del","global","nonlocal","assert","print",
-]);
-const KNOWN_MODULES = new Set([
-  "discord","commands","asyncio","os","sys","json","aiosqlite","sqlite3",
-  "typing","datetime","re","math","random","pathlib","collections","functools",
-  "itertools","enum","dataclasses","abc","io","time","logging","traceback",
-]);
-
-function tokenize(code: string): Token[] {
-  const tokens: Token[] = [];
-  let i = 0;
-  const len = code.length;
-  const push = (text: string, cls: string | null) => tokens.push({ text, cls });
-
-  while (i < len) {
-    const ch = code[i];
-    if (ch === "\n" || ch === "\r") { push(ch, null); i++; continue; }
-    if (ch === " " || ch === "\t") {
-      let j = i;
-      while (j < len && (code[j] === " " || code[j] === "\t")) j++;
-      push(code.slice(i, j), null); i = j; continue;
-    }
-    if (ch === "#") {
-      let j = i;
-      while (j < len && code[j] !== "\n" && code[j] !== "\r") j++;
-      push(code.slice(i, j), "code-cmt"); i = j; continue;
-    }
-    if (ch === "@") {
-      let j = i + 1;
-      while (j < len && /[\w.]/.test(code[j])) j++;
-      push(code.slice(i, j), "code-dec"); i = j; continue;
-    }
-    if ((ch === '"' || ch === "'") && code[i + 1] === ch && code[i + 2] === ch) {
-      const q = ch.repeat(3); let j = i + 3;
-      while (j < len && code.slice(j, j + 3) !== q) j++;
-      j += 3; push(code.slice(i, j), "code-str"); i = j; continue;
-    }
-    if (/[fFrRbBuU]/.test(ch) && (code[i + 1] === '"' || code[i + 1] === "'")) {
-      const q = code[i + 1]; let j = i + 2;
-      while (j < len && code[j] !== q && code[j] !== "\n") { if (code[j] === "\\") j++; j++; }
-      j++; push(code.slice(i, j), "code-str"); i = j; continue;
-    }
-    if (ch === '"' || ch === "'") {
-      const q = ch; let j = i + 1;
-      while (j < len && code[j] !== q && code[j] !== "\n") { if (code[j] === "\\") j++; j++; }
-      j++; push(code.slice(i, j), "code-str"); i = j; continue;
-    }
-    if (/[0-9]/.test(ch) || (ch === "." && /[0-9]/.test(code[i + 1] ?? ""))) {
-      let j = i;
-      while (j < len && /[0-9_.xXbBoOeEjJ]/.test(code[j])) j++;
-      push(code.slice(i, j), "code-num"); i = j; continue;
-    }
-    if (/[a-zA-Z_]/.test(ch)) {
-      let j = i;
-      while (j < len && /[\w]/.test(code[j])) j++;
-      const word = code.slice(i, j);
-      const prevTok = tokens[tokens.length - 1];
-      const afterDot = prevTok?.text === ".";
-      const nextCh = code[j];
-      const afterParen = nextCh === "(";
-      if (KEYWORDS.has(word)) push(word, "code-kw");
-      else if (afterDot) {
-        if (afterParen) push(word, "code-fn");
-        else if (/^[A-Z]/.test(word)) push(word, "code-cls");
-        else push(word, "code-mod");
-      } else if (afterParen) push(word, "code-fn");
-      else if (KNOWN_MODULES.has(word)) push(word, "code-mod");
-      else if (/^[A-Z]/.test(word) && word !== word.toUpperCase()) push(word, "code-cls");
-      else push(word, null);
-      i = j; continue;
-    }
-    push(ch, null); i++;
-  }
-  return tokens;
-}
-
-// ── Types ────────────────────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
+type BotStatus = "running" | "stopped" | "error";
 interface BotProject {
   id: string;
   name: string;
   clientId: string;
-  status: string;
+  status: BotStatus;
   createdAt: string;
   code: string;
 }
 
-interface FileEntry {
-  name: string;
-  content: string;
-}
+type Tab = "overview" | "database" | "logs" | "settings";
 
-// ── Storage ──────────────────────────────────────────────────────────────────
+// ── Storage helpers ───────────────────────────────────────────────────────────
 const STORAGE_KEY = "cogsforge:bots";
-
 function loadBots(): BotProject[] {
   if (typeof window === "undefined") return [];
   try { return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]"); }
   catch { return []; }
 }
-
-function saveBot(updated: BotProject) {
-  const bots = loadBots().map((b) => (b.id === updated.id ? updated : b));
+function saveBots(bots: BotProject[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(bots));
 }
 
-// ── Defaults ─────────────────────────────────────────────────────────────────
-const DEFAULT_CODE = `import discord
-from discord.ext import commands
-import os
-
-intents = discord.Intents.default()
-intents.message_content = True
-
-bot = commands.Bot(command_prefix='!', intents=intents)
-
-@bot.event
-async def on_ready():
-    print(f'Eingeloggt als {bot.user}')
-
-@bot.command()
-async def ping(ctx):
-    await ctx.send('Pong!')
-
-bot.run(os.environ['DISCORD_TOKEN'])
-`;
-
-const DEFAULT_FILES: FileEntry[] = [
-  { name: "bot.py", content: DEFAULT_CODE },
-  { name: "requirements.txt", content: "discord.py\n" },
-];
-
-function parseFiles(raw: string): FileEntry[] {
-  try {
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0].name === "string") {
-      return parsed as FileEntry[];
-    }
-  } catch { /* not JSON */ }
-  return [{ name: "bot.py", content: raw ?? DEFAULT_CODE }, { name: "requirements.txt", content: "discord.py\n" }];
+// ── Supabase connection type ──────────────────────────────────────────────────
+interface SupabaseConn {
+  url: string;
+  anonKey: string;
+  serviceKey?: string;
 }
 
-// ── Highlighted tokens renderer ───────────────────────────────────────────────
-function Highlighted({ tokens }: { tokens: Token[] }) {
+// ── Status helpers ────────────────────────────────────────────────────────────
+const STATUS_DOT: Record<BotStatus, string> = {
+  running: "bg-emerald-400", stopped: "bg-zinc-500", error: "bg-red-500",
+};
+const STATUS_LABEL: Record<BotStatus, string> = {
+  running: "Online", stopped: "Offline", error: "Fehler",
+};
+const STATUS_TEXT: Record<BotStatus, string> = {
+  running: "text-emerald-400", stopped: "text-zinc-400", error: "text-red-400",
+};
+function mapDockerStatus(s: string): BotStatus {
+  if (s === "running" || s === "restarting") return "running";
+  if (s === "dead") return "error";
+  return "stopped";
+}
+
+function StatusDot({ status, ping = false }: { status: BotStatus; ping?: boolean }) {
   return (
-    <>
-      {tokens.map((tok, idx) =>
-        tok.cls ? <span key={idx} className={tok.cls}>{tok.text}</span> : tok.text
+    <span className="relative flex size-2 shrink-0">
+      {ping && status === "running" && (
+        <span className={cn("animate-ping absolute inline-flex h-full w-full rounded-full opacity-60", STATUS_DOT[status])} />
       )}
-    </>
+      <span className={cn("relative inline-flex rounded-full size-2", STATUS_DOT[status])} />
+    </span>
   );
 }
 
-// ── Page ─────────────────────────────────────────────────────────────────────
-export default function EditorPage({ params }: { params: Promise<{ botId: string }> }) {
+// ── Overview Tab ──────────────────────────────────────────────────────────────
+function OverviewTab({ bot, onStart, onStop, onRestart, actionState }: {
+  bot: BotProject;
+  onStart: () => void;
+  onStop: () => void;
+  onRestart: () => void;
+  actionState: string;
+}) {
+  const busy = actionState !== "idle";
+  const uptime = bot.status === "running"
+    ? `Aktiv seit ${new Date(bot.createdAt).toLocaleDateString("de-DE")}`
+    : "Bot ist offline";
+
+  return (
+    <div className="space-y-6">
+      {/* Status card */}
+      <div className="rounded-xl border border-border bg-card overflow-hidden">
+        <div className="px-5 py-4 border-b border-border/60 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <StatusDot status={bot.status} ping />
+            <div>
+              <p className={cn("text-sm font-semibold", STATUS_TEXT[bot.status])}>
+                {STATUS_LABEL[bot.status]}
+              </p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">{uptime}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 px-3 text-[11px] gap-1.5"
+              onClick={bot.status === "running" ? onStop : onStart}
+              disabled={busy}
+            >
+              {bot.status === "running"
+                ? <><Square className="size-3" />Stop</>
+                : <><Play className="size-3" />Start</>
+              }
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 px-3 text-[11px] gap-1.5"
+              onClick={onRestart}
+              disabled={busy || bot.status !== "running"}
+            >
+              <RotateCcw className={cn("size-3", busy && "animate-spin")} />
+              Restart
+            </Button>
+            <Link href={`/projects/${bot.id}/editor`}>
+              <Button size="sm" className="h-7 px-3 text-[11px] gap-1.5">
+                <Code2 className="size-3" />
+                Code Editor
+              </Button>
+            </Link>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-3 divide-x divide-border/60">
+          {[
+            { label: "Projekt ID", value: bot.id.slice(0, 12) + "…" },
+            { label: "Erstellt", value: new Date(bot.createdAt).toLocaleDateString("de-DE") },
+            { label: "Client ID", value: bot.clientId ? bot.clientId.slice(0, 8) + "…" : "—" },
+          ].map(({ label, value }) => (
+            <div key={label} className="px-5 py-3">
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium">{label}</p>
+              <p className="text-sm font-mono mt-0.5 text-foreground/80">{value}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Deploy section */}
+      <div className="rounded-xl border border-border bg-card px-5 py-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Rocket className="size-4 text-muted-foreground" />
+          <h3 className="text-sm font-semibold">Deploy</h3>
+        </div>
+        <p className="text-[12px] text-muted-foreground">
+          Öffne den Code Editor um deinen Bot zu deployen. Der Bot Token wird sicher im Editor eingegeben und nicht gespeichert.
+        </p>
+        <div className="flex gap-2 mt-3">
+          <Link href={`/projects/${bot.id}/editor`}>
+            <Button size="sm" variant="outline" className="h-7 text-[11px] gap-1.5">
+              <Code2 className="size-3" />
+              Im Editor öffnen
+            </Button>
+          </Link>
+        </div>
+      </div>
+
+      {bot.status === "error" && (
+        <div className="rounded-xl border border-red-500/30 bg-red-500/5 px-5 py-4 flex items-start gap-3">
+          <AlertCircle className="size-4 text-red-400 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-semibold text-red-400">Bot abgestürzt</p>
+            <p className="text-[12px] text-muted-foreground mt-1">
+              Der Bot konnte nicht starten oder ist unerwartet beendet worden. Überprüfe die Logs oder den Code.
+            </p>
+            <div className="flex gap-2 mt-2">
+              <Link href={`/projects/${bot.id}/editor`}>
+                <Button size="sm" variant="outline" className="h-7 text-[11px] gap-1.5">
+                  <Code2 className="size-3" />Code prüfen
+                </Button>
+              </Link>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Logs Tab ──────────────────────────────────────────────────────────────────
+function LogsTab({ botId }: { botId: string }) {
+  const [lines, setLines] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  const fetchLogs = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/hosting/${botId}/logs`);
+      if (res.ok) {
+        const data = await res.json();
+        setLines(data.logs ?? []);
+        setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
+      }
+    } catch {}
+  }, [botId]);
+
+  useEffect(() => {
+    setLoading(true);
+    fetchLogs().finally(() => setLoading(false));
+    const iv = setInterval(fetchLogs, 3000);
+    return () => clearInterval(iv);
+  }, [fetchLogs]);
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-sm font-semibold">Live Logs</h3>
+          <p className="text-[11px] text-muted-foreground mt-0.5">Aktualisiert alle 3 Sekunden</p>
+        </div>
+        <Button size="sm" variant="outline" className="h-7 text-[11px] gap-1.5" onClick={() => { setLoading(true); fetchLogs().finally(() => setLoading(false)); }}>
+          <RefreshCw className={cn("size-3", loading && "animate-spin")} />
+          Refresh
+        </Button>
+      </div>
+      <div className="rounded-xl border border-border bg-zinc-950 dark:bg-black/60 p-4 font-mono text-[11px] leading-relaxed min-h-96 max-h-[60vh] overflow-y-auto">
+        {loading && lines.length === 0 ? (
+          <span className="text-zinc-500">Lade Logs…</span>
+        ) : lines.length === 0 ? (
+          <span className="text-zinc-500">Keine Logs verfügbar. Starte den Bot um Logs zu sehen.</span>
+        ) : (
+          lines.map((l, i) => (
+            <div key={i} className="text-zinc-300 whitespace-pre-wrap break-all hover:bg-white/3 px-1 -mx-1 rounded">{l}</div>
+          ))
+        )}
+        <div ref={bottomRef} />
+      </div>
+    </div>
+  );
+}
+
+// ── Settings Tab ──────────────────────────────────────────────────────────────
+function SettingsTab({ bot, onUpdate, onDelete }: {
+  bot: BotProject;
+  onUpdate: (b: BotProject) => void;
+  onDelete: () => void;
+}) {
+  const [name, setName] = useState(bot.name);
+  const [clientId, setClientId] = useState(bot.clientId);
+  const [saved, setSaved] = useState(false);
+  const [confirm, setConfirm] = useState(false);
+
+  const handleSave = () => {
+    const updated = { ...bot, name: name.trim() || bot.name, clientId: clientId.trim() };
+    const bots = loadBots().map((b) => b.id === bot.id ? updated : b);
+    saveBots(bots);
+    onUpdate(updated);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
+
+  return (
+    <div className="space-y-6 max-w-xl">
+      <div className="rounded-xl border border-border bg-card px-5 py-4 space-y-4">
+        <h3 className="text-sm font-semibold">Allgemein</h3>
+        <div className="space-y-1.5">
+          <Label className="text-[12px]">Bot Name</Label>
+          <Input value={name} onChange={(e) => setName(e.target.value)} className="h-8 text-sm" />
+        </div>
+        <div className="space-y-1.5">
+          <Label className="text-[12px]">Application ID <span className="text-muted-foreground font-normal">(optional)</span></Label>
+          <Input value={clientId} onChange={(e) => setClientId(e.target.value)} className="h-8 text-sm font-mono" placeholder="1234567890123456789" />
+        </div>
+        <div className="flex items-center gap-2">
+          <Button size="sm" className="h-7 text-[11px]" onClick={handleSave}>Speichern</Button>
+          {saved && (
+            <span className="flex items-center gap-1 text-[11px] text-emerald-400">
+              <CheckCircle2 className="size-3" />Gespeichert
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-red-500/30 bg-red-500/5 px-5 py-4 space-y-3">
+        <h3 className="text-sm font-semibold text-red-400">Danger Zone</h3>
+        <p className="text-[12px] text-muted-foreground">Das Löschen des Projekts ist unwiderruflich. Alle Daten werden entfernt.</p>
+        {!confirm ? (
+          <Button size="sm" variant="outline" className="h-7 text-[11px] gap-1.5 border-red-500/40 text-red-400 hover:bg-red-500/10 hover:text-red-300" onClick={() => setConfirm(true)}>
+            <Trash2 className="size-3" />Projekt löschen
+          </Button>
+        ) : (
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] text-muted-foreground">Wirklich löschen?</span>
+            <Button size="sm" className="h-7 text-[11px] bg-red-500 hover:bg-red-600 text-white" onClick={onDelete}>Ja, löschen</Button>
+            <Button size="sm" variant="ghost" className="h-7 text-[11px]" onClick={() => setConfirm(false)}>Abbrechen</Button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Database Tab ──────────────────────────────────────────────────────────────
+type SupabaseTableDef = Record<string, { type: string; description?: string }>;
+type SupabaseSpec = {
+  paths: Record<string, unknown>;
+  definitions: Record<string, { properties?: SupabaseTableDef }>;
+};
+
+function DatabaseTab({ botId }: { botId: string }) {
+  const CONN_KEY = `flowwave:supabase:${botId}`;
+  const [conn, setConn] = useState<SupabaseConn | null>(null);
+  const [tables, setTables] = useState<string[]>([]);
+  const [columns, setColumns] = useState<Record<string, string[]>>({});
+  const [activeTable, setActiveTable] = useState<string | null>(null);
+  const [rows, setRows] = useState<Record<string, unknown>[]>([]);
+  const [rowCols, setRowCols] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [tableSearch, setTableSearch] = useState("");
+  const [rowFilter, setRowFilter] = useState("");
+  const [page, setPage] = useState(0);
+  const [total, setTotal] = useState(0);
+  const [sqlMode, setSqlMode] = useState(false);
+  const [sql, setSql] = useState("SELECT * FROM ");
+  const [sqlRows, setSqlRows] = useState<Record<string, unknown>[]>([]);
+  const [sqlCols, setSqlCols] = useState<string[]>([]);
+  const [sqlError, setSqlError] = useState("");
+  const [sqlLoading, setSqlLoading] = useState(false);
+  const PAGE_SIZE = 50;
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(CONN_KEY);
+      if (raw) setConn(JSON.parse(raw));
+    } catch {}
+  }, [CONN_KEY]);
+
+  const headers = useCallback((key: string) => ({
+    "apikey": key,
+    "Authorization": `Bearer ${key}`,
+    "Content-Type": "application/json",
+  }), []);
+
+  const fetchSchema = useCallback(async (c: SupabaseConn) => {
+    try {
+      const res = await fetch(`${c.url}/rest/v1/`, { headers: headers(c.anonKey) });
+      const spec: SupabaseSpec = await res.json();
+      const tableNames = Object.keys(spec.paths ?? {})
+        .filter((p) => !p.includes("{") && p !== "/")
+        .map((p) => p.replace(/^\//, ""));
+      setTables(tableNames);
+      const cols: Record<string, string[]> = {};
+      for (const t of tableNames) {
+        const def = spec.definitions?.[t];
+        if (def?.properties) cols[t] = Object.keys(def.properties);
+      }
+      setColumns(cols);
+    } catch {}
+  }, [headers]);
+
+  useEffect(() => {
+    if (conn) fetchSchema(conn);
+  }, [conn, fetchSchema]);
+
+  const fetchRows = useCallback(async (table: string, offset = 0, filter = "") => {
+    if (!conn) return;
+    setLoading(true);
+    try {
+      let url = `${conn.url}/rest/v1/${table}?limit=${PAGE_SIZE}&offset=${offset}`;
+      if (filter) url += `&${filter}`;
+      const res = await fetch(url, {
+        headers: { ...headers(conn.anonKey), "Prefer": "count=exact" },
+      });
+      const contentRange = res.headers.get("content-range");
+      if (contentRange) {
+        const match = contentRange.match(/\/(\d+)$/);
+        if (match) setTotal(parseInt(match[1]));
+      }
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        setRows(data);
+        setRowCols(data.length > 0 ? Object.keys(data[0]) : (columns[table] ?? []));
+      } else {
+        setRows([]); setRowCols(columns[table] ?? []);
+      }
+    } catch {} finally { setLoading(false); }
+  }, [conn, columns, headers]);
+
+  const handleTableClick = (t: string) => {
+    setActiveTable(t);
+    setPage(0);
+    setRowFilter("");
+    setSqlMode(false);
+    fetchRows(t, 0);
+  };
+
+  const handleRunSql = async () => {
+    if (!conn || !sql.trim()) return;
+    const key = conn.serviceKey || conn.anonKey;
+    const tableMatch = sql.match(/from\s+"?(\w+)"?/i);
+    if (!tableMatch) { setSqlError("Kein FROM gefunden. Nur SELECT-Abfragen auf Tabellen werden unterstützt."); return; }
+    const table = tableMatch[1];
+    const selectMatch = sql.match(/select\s+(.*?)\s+from/i);
+    const select = selectMatch ? selectMatch[1].trim() : "*";
+    const whereMatch = sql.match(/where\s+([\s\S]*?)(?:order|limit|offset|$)/i);
+    const limitMatch = sql.match(/limit\s+(\d+)/i);
+    const orderMatch = sql.match(/order\s+by\s+(\w+)(?:\s+(asc|desc))?/i);
+
+    setSqlLoading(true); setSqlError(""); setSqlRows([]); setSqlCols([]);
+    try {
+      let url = `${conn.url}/rest/v1/${table}?select=${select}`;
+      if (whereMatch?.[1]) url += `&${whereMatch[1].trim().replace(/\s*=\s*/g, "=eq.")}`;
+      if (limitMatch) url += `&limit=${limitMatch[1]}`;
+      if (orderMatch) url += `&order=${orderMatch[1]}.${(orderMatch[2] ?? "asc").toLowerCase()}`;
+
+      const res = await fetch(url, { headers: headers(key) });
+      const data = await res.json();
+      if (!res.ok) { setSqlError(JSON.stringify(data)); return; }
+      if (Array.isArray(data)) {
+        setSqlRows(data);
+        setSqlCols(data.length > 0 ? Object.keys(data[0]) : []);
+      }
+    } catch (e) {
+      setSqlError(String(e));
+    } finally { setSqlLoading(false); }
+  };
+
+  if (!conn) {
+    return <ConnectSupabaseForm onConnect={(c) => {
+      localStorage.setItem(CONN_KEY, JSON.stringify(c));
+      setConn(c);
+    }} />;
+  }
+
+  const filteredTables = tables.filter((t) =>
+    t.toLowerCase().includes(tableSearch.toLowerCase())
+  );
+
+  return (
+    <div className="flex h-[calc(100vh-14rem)] rounded-xl border border-border overflow-hidden">
+      {/* Sidebar */}
+      <div className="w-52 shrink-0 border-r border-border bg-card/40 flex flex-col">
+        <div className="px-3 py-2.5 border-b border-border/60 flex items-center justify-between">
+          <div className="flex items-center gap-1.5">
+            <Database className="size-3.5 text-muted-foreground" />
+            <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Tabellen</span>
+          </div>
+          <button
+            onClick={() => { setConn(null); localStorage.removeItem(CONN_KEY); setTables([]); setActiveTable(null); }}
+            title="Verbindung trennen"
+            className="text-muted-foreground hover:text-destructive"
+          >
+            <X className="size-3" />
+          </button>
+        </div>
+        <div className="px-2 py-1.5 border-b border-border/60">
+          <div className="relative">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3 text-muted-foreground" />
+            <input
+              value={tableSearch}
+              onChange={(e) => setTableSearch(e.target.value)}
+              placeholder="Tabelle suchen…"
+              className="w-full pl-6 pr-2 py-1 text-[11px] bg-background border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary/40"
+            />
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto py-1">
+          {filteredTables.length === 0 ? (
+            <p className="text-[11px] text-muted-foreground px-3 py-2">Keine Tabellen gefunden</p>
+          ) : filteredTables.map((t) => (
+            <button
+              key={t}
+              onClick={() => handleTableClick(t)}
+              className={cn(
+                "w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-left transition-colors",
+                activeTable === t
+                  ? "bg-primary/10 text-primary"
+                  : "text-muted-foreground hover:text-foreground hover:bg-accent"
+              )}
+            >
+              <Table2 className="size-3 shrink-0" />
+              <span className="truncate">{t}</span>
+            </button>
+          ))}
+        </div>
+        <div className="px-2 py-2 border-t border-border/60">
+          <button
+            onClick={() => { setSqlMode(true); setActiveTable(null); }}
+            className={cn(
+              "w-full flex items-center gap-2 px-3 py-1.5 text-[12px] rounded-md transition-colors",
+              sqlMode && !activeTable
+                ? "bg-primary/10 text-primary"
+                : "text-muted-foreground hover:text-foreground hover:bg-accent"
+            )}
+          >
+            <Code2 className="size-3 shrink-0" />
+            SQL Editor
+          </button>
+        </div>
+      </div>
+
+      {/* Main content */}
+      <div className="flex-1 flex flex-col min-w-0 bg-background">
+        {!activeTable && !sqlMode ? (
+          <div className="flex-1 flex items-center justify-center text-center">
+            <div className="space-y-2">
+              <Table2 className="size-8 text-muted-foreground/40 mx-auto" />
+              <p className="text-sm text-muted-foreground">Wähle eine Tabelle aus der Sidebar</p>
+              <p className="text-[11px] text-muted-foreground/60">oder öffne den SQL Editor</p>
+            </div>
+          </div>
+        ) : sqlMode ? (
+          <SqlEditor
+            sql={sql}
+            onSqlChange={setSql}
+            onRun={handleRunSql}
+            loading={sqlLoading}
+            rows={sqlRows}
+            cols={sqlCols}
+            error={sqlError}
+            hasServiceKey={!!conn.serviceKey}
+          />
+        ) : (
+          <TableView
+            table={activeTable!}
+            rows={rows}
+            cols={rowCols}
+            loading={loading}
+            page={page}
+            total={total}
+            pageSize={PAGE_SIZE}
+            onRefresh={() => fetchRows(activeTable!, page * PAGE_SIZE, rowFilter)}
+            onPageChange={(p) => { setPage(p); fetchRows(activeTable!, p * PAGE_SIZE, rowFilter); }}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ConnectSupabaseForm({ onConnect }: { onConnect: (c: SupabaseConn) => void }) {
+  const [url, setUrl] = useState("");
+  const [anonKey, setAnonKey] = useState("");
+  const [serviceKey, setServiceKey] = useState("");
+  const [showAnon, setShowAnon] = useState(false);
+  const [showService, setShowService] = useState(false);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleConnect = async () => {
+    if (!url.trim() || !anonKey.trim()) { setError("URL und Anon Key sind erforderlich."); return; }
+    setLoading(true); setError("");
+    try {
+      const res = await fetch(`${url.replace(/\/$/, "")}/rest/v1/`, {
+        headers: { apikey: anonKey, Authorization: `Bearer ${anonKey}` },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      onConnect({ url: url.replace(/\/$/, ""), anonKey, serviceKey: serviceKey.trim() || undefined });
+    } catch (e) {
+      setError("Verbindung fehlgeschlagen. Überprüfe URL und Key.");
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <div className="flex items-center justify-center h-full">
+      <div className="w-full max-w-md space-y-5">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="size-10 rounded-xl bg-emerald-500/10 flex items-center justify-center">
+            <Plug className="size-5 text-emerald-400" />
+          </div>
+          <div>
+            <h3 className="font-semibold">Supabase verbinden</h3>
+            <p className="text-[12px] text-muted-foreground">Verbinde dein Supabase-Projekt</p>
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label className="text-[12px]">Project URL</Label>
+          <Input
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="https://xyzcompany.supabase.co"
+            className="h-8 text-[12px] font-mono"
+          />
+        </div>
+
+        <div className="space-y-1.5">
+          <Label className="text-[12px]">Anon Key <span className="text-muted-foreground font-normal">(public)</span></Label>
+          <div className="relative">
+            <Input
+              type={showAnon ? "text" : "password"}
+              value={anonKey}
+              onChange={(e) => setAnonKey(e.target.value)}
+              placeholder="eyJhbGciOiJI…"
+              className="h-8 text-[12px] font-mono pr-8"
+            />
+            <button type="button" onClick={() => setShowAnon(v => !v)} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+              {showAnon ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+            </button>
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label className="text-[12px]">Service Role Key <span className="text-muted-foreground font-normal">(optional, für SQL Editor)</span></Label>
+          <div className="relative">
+            <Input
+              type={showService ? "text" : "password"}
+              value={serviceKey}
+              onChange={(e) => setServiceKey(e.target.value)}
+              placeholder="eyJhbGciOiJI…"
+              className="h-8 text-[12px] font-mono pr-8"
+            />
+            <button type="button" onClick={() => setShowService(v => !v)} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+              {showService ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+            </button>
+          </div>
+        </div>
+
+        {error && (
+          <div className="flex items-center gap-2 text-[11px] text-red-400">
+            <AlertCircle className="size-3.5 shrink-0" />
+            {error}
+          </div>
+        )}
+
+        <Button className="w-full h-8 text-[12px]" onClick={handleConnect} disabled={loading}>
+          {loading ? <><RefreshCw className="size-3 animate-spin mr-1.5" />Verbinde…</> : <><Plug className="size-3 mr-1.5" />Verbinden</>}
+        </Button>
+
+        <p className="text-[10px] text-muted-foreground text-center">
+          Die Keys werden nur lokal in deinem Browser gespeichert.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function TableView({ table, rows, cols, loading, page, total, pageSize, onRefresh, onPageChange }: {
+  table: string; rows: Record<string, unknown>[]; cols: string[]; loading: boolean;
+  page: number; total: number; pageSize: number;
+  onRefresh: () => void; onPageChange: (p: number) => void;
+}) {
+  const pages = Math.ceil(total / pageSize) || 1;
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0">
+        <div className="flex items-center gap-2">
+          <Table2 className="size-3.5 text-muted-foreground" />
+          <span className="text-sm font-semibold">{table}</span>
+          <span className="text-[11px] text-muted-foreground">
+            {total > 0 ? `${total} Zeilen` : ""}
+          </span>
+        </div>
+        <Button size="sm" variant="ghost" className="h-7 text-[11px] gap-1.5" onClick={onRefresh} disabled={loading}>
+          <RefreshCw className={cn("size-3", loading && "animate-spin")} />
+          Refresh
+        </Button>
+      </div>
+
+      <div className="flex-1 overflow-auto">
+        {loading ? (
+          <div className="flex items-center justify-center h-32 text-muted-foreground text-[12px] gap-2">
+            <RefreshCw className="size-3.5 animate-spin" />Lade Daten…
+          </div>
+        ) : rows.length === 0 ? (
+          <div className="flex items-center justify-center h-32 text-muted-foreground text-[12px]">
+            Keine Zeilen in dieser Tabelle
+          </div>
+        ) : (
+          <table className="w-full text-[12px] border-collapse">
+            <thead className="sticky top-0 bg-muted/80 backdrop-blur-sm">
+              <tr>
+                {cols.map((c) => (
+                  <th key={c} className="text-left px-3 py-2 font-semibold text-muted-foreground border-b border-border whitespace-nowrap">
+                    {c}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, i) => (
+                <tr key={i} className="border-b border-border/40 hover:bg-accent/30 transition-colors">
+                  {cols.map((c) => {
+                    const val = row[c];
+                    const str = val === null ? "null" : val === undefined ? "" : typeof val === "object" ? JSON.stringify(val) : String(val);
+                    return (
+                      <td key={c} className={cn(
+                        "px-3 py-1.5 max-w-[240px] truncate align-top",
+                        val === null ? "text-muted-foreground/50 italic" : "text-foreground/80"
+                      )}>
+                        {str}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {pages > 1 && (
+        <div className="flex items-center justify-between px-4 py-2 border-t border-border shrink-0 text-[11px]">
+          <span className="text-muted-foreground">
+            Seite {page + 1} von {pages} · {total} Zeilen gesamt
+          </span>
+          <div className="flex items-center gap-1">
+            <Button size="icon" variant="ghost" className="size-6" disabled={page === 0} onClick={() => onPageChange(page - 1)}>
+              <ChevronLeft className="size-3" />
+            </Button>
+            <Button size="icon" variant="ghost" className="size-6" disabled={page >= pages - 1} onClick={() => onPageChange(page + 1)}>
+              <ChevronRightIcon className="size-3" />
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SqlEditor({ sql, onSqlChange, onRun, loading, rows, cols, error, hasServiceKey }: {
+  sql: string; onSqlChange: (s: string) => void; onRun: () => void;
+  loading: boolean; rows: Record<string, unknown>[]; cols: string[];
+  error: string; hasServiceKey: boolean;
+}) {
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0">
+        <span className="text-sm font-semibold">SQL Editor</span>
+        <Button size="sm" className="h-7 text-[11px] gap-1.5" onClick={onRun} disabled={loading}>
+          {loading ? <RefreshCw className="size-3 animate-spin" /> : <Play className="size-3" />}
+          Ausführen
+        </Button>
+      </div>
+
+      <div className="p-3 border-b border-border shrink-0">
+        <textarea
+          value={sql}
+          onChange={(e) => onSqlChange(e.target.value)}
+          onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); onRun(); } }}
+          className="w-full h-32 bg-muted/40 border border-border rounded-lg p-3 font-mono text-[12px] leading-[1.6] resize-none focus:outline-none focus:ring-1 focus:ring-primary/40 text-foreground"
+          placeholder="SELECT * FROM table_name LIMIT 50;"
+          spellCheck={false}
+        />
+        <p className="text-[10px] text-muted-foreground mt-1.5">
+          {hasServiceKey ? "⌘+Enter zum Ausführen" : "Hinweis: Nur SELECT-Abfragen auf zugängliche Tabellen. Service Role Key für erweiterte Queries."}
+        </p>
+      </div>
+
+      <div className="flex-1 overflow-auto">
+        {error ? (
+          <div className="m-4 rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-3 text-[12px] font-mono text-red-400">
+            {error}
+          </div>
+        ) : rows.length === 0 && !loading ? (
+          <div className="flex items-center justify-center h-32 text-muted-foreground text-[12px]">
+            Führe eine Abfrage aus um Ergebnisse zu sehen
+          </div>
+        ) : (
+          <table className="w-full text-[12px] border-collapse">
+            <thead className="sticky top-0 bg-muted/80 backdrop-blur-sm">
+              <tr>
+                {cols.map((c) => (
+                  <th key={c} className="text-left px-3 py-2 font-semibold text-muted-foreground border-b border-border whitespace-nowrap">{c}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, i) => (
+                <tr key={i} className="border-b border-border/40 hover:bg-accent/30">
+                  {cols.map((c) => {
+                    const val = row[c];
+                    const str = val === null ? "null" : typeof val === "object" ? JSON.stringify(val) : String(val);
+                    return (
+                      <td key={c} className={cn("px-3 py-1.5 max-w-[240px] truncate", val === null ? "text-muted-foreground/50 italic" : "text-foreground/80")}>
+                        {str}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Main Page ─────────────────────────────────────────────────────────────────
+export default function ProjectPage({ params }: { params: Promise<{ botId: string }> }) {
   const { botId } = use(params);
   const router = useRouter();
-
   const [bot, setBot] = useState<BotProject | null>(null);
-  const [files, setFiles] = useState<FileEntry[]>(DEFAULT_FILES);
-  const [activeIdx, setActiveIdx] = useState(0);
-  const [folderOpen, setFolderOpen] = useState(true);
-  const [renamingIdx, setRenamingIdx] = useState<number | null>(null);
-  const [renameValue, setRenameValue] = useState("");
-  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
-  const [token, setToken] = useState("");
-  const [showToken, setShowToken] = useState(false);
-  const [saved, setSaved] = useState(true);
-  const [deploying, setDeploying] = useState(false);
-  const [deployError, setDeployError] = useState("");
-  const [deploySuccess, setDeploySuccess] = useState(false);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const renameInputRef = useRef<HTMLInputElement>(null);
-
-  const activeFile = files[activeIdx] ?? files[0];
-  const code = activeFile?.content ?? "";
-  const tokens = useMemo(() => tokenize(code), [code]);
+  const [tab, setTab] = useState<Tab>("overview");
+  const [actionState, setActionState] = useState("idle");
 
   useEffect(() => {
     const found = loadBots().find((b) => b.id === botId);
     if (!found) { router.push("/projects"); return; }
     setBot(found);
-    setFiles(parseFiles(found.code));
   }, [botId, router]);
 
-  useEffect(() => {
-    if (renamingIdx !== null) renameInputRef.current?.select();
-  }, [renamingIdx]);
-
-  const setCode = useCallback((newCode: string) => {
-    setFiles((prev) => prev.map((f, i) => i === activeIdx ? { ...f, content: newCode } : f));
-    setSaved(false);
-    setDeploySuccess(false);
-  }, [activeIdx]);
-
-  const handleSave = useCallback(() => {
-    if (!bot) return;
-    const updated = { ...bot, code: JSON.stringify(files) };
-    saveBot(updated);
+  const updateBot = (updated: BotProject) => {
     setBot(updated);
-    setSaved(true);
-  }, [bot, files]);
+    saveBots(loadBots().map((b) => b.id === updated.id ? updated : b));
+  };
 
-  const handleDeploy = async () => {
-    if (!bot || !token.trim()) { setDeployError("Token erforderlich."); return; }
-    setDeploying(true); setDeployError(""); setDeploySuccess(false);
+  const handleStart = async () => {
+    if (!bot) return;
+    setActionState("starting");
     try {
-      handleSave();
-      const res = await fetch("/api/hosting/deploy", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bot_id: bot.id, code, token: token.trim() }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail ?? "Deploy fehlgeschlagen.");
-      }
-      const bots = loadBots().map((b) =>
-        b.id === bot.id ? { ...b, code: JSON.stringify(files), status: "running" } : b
-      );
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(bots));
-      setBot((prev) => prev ? { ...prev, status: "running" } : prev);
-      setDeploySuccess(true);
-      setToken("");
-    } catch (e) {
-      setDeployError(e instanceof Error ? e.message : "Deploy fehlgeschlagen.");
-    } finally {
-      setDeploying(false);
+      const res = await fetch(`/api/hosting/${botId}/start`, { method: "POST" });
+      updateBot({ ...bot, status: res.ok ? "running" : "error" });
+    } catch { updateBot({ ...bot, status: "error" }); }
+    finally { setActionState("idle"); }
+  };
+
+  const handleStop = async () => {
+    if (!bot) return;
+    setActionState("stopping");
+    try {
+      const res = await fetch(`/api/hosting/${botId}/stop`, { method: "POST" });
+      if (res.ok) updateBot({ ...bot, status: "stopped" });
+    } finally { setActionState("idle"); }
+  };
+
+  const handleRestart = async () => {
+    if (!bot) return;
+    setActionState("restarting");
+    try { await fetch(`/api/hosting/${botId}/restart`, { method: "POST" }); }
+    finally { setActionState("idle"); }
+  };
+
+  const handleDelete = async () => {
+    setActionState("deleting");
+    try { await fetch(`/api/hosting/${botId}`, { method: "DELETE" }); }
+    finally {
+      saveBots(loadBots().filter((b) => b.id !== botId));
+      router.push("/projects");
     }
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Tab") {
-      e.preventDefault();
-      const ta = e.currentTarget;
-      const start = ta.selectionStart;
-      const end = ta.selectionEnd;
-      const next = code.substring(0, start) + "    " + code.substring(end);
-      setCode(next);
-      requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = start + 4; });
-    }
-    if ((e.metaKey || e.ctrlKey) && e.key === "s") {
-      e.preventDefault();
-      handleSave();
-    }
-  };
-
-  // ── File management ───────────────────────────────────────────────────────
-  const handleNewFile = () => {
-    const baseName = "neue_datei.py";
-    let name = baseName;
-    let n = 1;
-    while (files.some((f) => f.name === name)) { name = `neue_datei_${n++}.py`; }
-    const updated = [...files, { name, content: "" }];
-    setFiles(updated);
-    const newIdx = updated.length - 1;
-    setActiveIdx(newIdx);
-    setSaved(false);
-    setRenamingIdx(newIdx);
-    setRenameValue(name);
-  };
-
-  const handleDeleteFile = (idx: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (files.length <= 1) return;
-    const updated = files.filter((_, i) => i !== idx);
-    setFiles(updated);
-    setActiveIdx((prev) => (prev >= updated.length ? updated.length - 1 : prev === idx ? Math.max(0, idx - 1) : prev > idx ? prev - 1 : prev));
-    setSaved(false);
-  };
-
-  const handleStartRename = (idx: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setRenamingIdx(idx);
-    setRenameValue(files[idx].name);
-  };
-
-  const handleCommitRename = () => {
-    if (renamingIdx === null) return;
-    const trimmed = renameValue.trim();
-    if (trimmed) {
-      setFiles((prev) => prev.map((f, i) => i === renamingIdx ? { ...f, name: trimmed } : f));
-      setSaved(false);
-    }
-    setRenamingIdx(null);
-  };
-
-  const handleRenameKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") handleCommitRename();
-    if (e.key === "Escape") setRenamingIdx(null);
   };
 
   if (!bot) return null;
 
-  return (
-    <div className="flex flex-col h-screen bg-[oklch(0.07_0.014_258)] text-zinc-300 overflow-hidden">
-      {/* Title bar — no macOS dots */}
-      <div className="flex items-center gap-3 px-4 py-2.5 border-b border-white/8 bg-black/30 shrink-0">
-        <Link
-          href="/projects"
-          className="flex items-center gap-1.5 text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors shrink-0"
-        >
-          <ArrowLeft className="size-3" />
-          Dashboard
-        </Link>
-        <span className="text-[11px] text-zinc-500 font-mono flex-1 text-center select-none">
-          {bot.name} — {activeFile?.name ?? ""}
-        </span>
-        <div className="flex items-center gap-2 shrink-0">
-          <span className={cn("text-[10px] px-1.5 py-0.5 rounded", saved ? "text-zinc-600" : "text-amber-400/80 bg-amber-400/10")}>
-            {saved ? "Gespeichert" : "Ungespeichert"}
-          </span>
-          <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px] gap-1 text-zinc-400 hover:text-zinc-200" onClick={handleSave}>
-            <Save className="size-3" />
-            Speichern
-          </Button>
-        </div>
-      </div>
+  const TABS: { key: Tab; label: string; icon: React.ElementType }[] = [
+    { key: "overview", label: "Übersicht", icon: Activity },
+    { key: "database", label: "Datenbank", icon: Database },
+    { key: "logs", label: "Logs", icon: Terminal },
+    { key: "settings", label: "Einstellungen", icon: Settings },
+  ];
 
-      <div className="flex flex-1 min-h-0">
-        {/* Sidebar */}
-        <div className="w-48 shrink-0 border-r border-white/8 bg-black/20 flex flex-col">
-          {/* Explorer header */}
-          <div className="flex items-center justify-between px-3 py-2">
-            <p className="text-[9px] text-zinc-600 font-semibold uppercase tracking-widest select-none">
-              Explorer
-            </p>
-            <button
-              onClick={handleNewFile}
-              title="Neue Datei"
-              className="text-zinc-600 hover:text-zinc-300 transition-colors"
-            >
-              <Plus className="size-3.5" />
-            </button>
+  return (
+    <div className="min-h-screen">
+      {/* Project header */}
+      <div className="border-b border-border/70 bg-card/30">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6">
+          {/* Breadcrumb + actions */}
+          <div className="flex items-center justify-between py-4 gap-4">
+            <div className="flex items-center gap-3 min-w-0">
+              <Link
+                href="/projects"
+                className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors shrink-0"
+              >
+                <ArrowLeft className="size-3" />
+                <span className="hidden sm:inline">Projekte</span>
+              </Link>
+              <ChevronRight className="size-3.5 text-border shrink-0" />
+              <div className="flex items-center gap-2.5 min-w-0">
+                <StatusDot status={bot.status} ping />
+                <h1 className="font-semibold text-base truncate">{bot.name}</h1>
+                <span className={cn(
+                  "hidden sm:inline text-[11px] font-medium px-2 py-0.5 rounded-full",
+                  bot.status === "running" ? "bg-emerald-400/10 text-emerald-400" :
+                  bot.status === "error"   ? "bg-red-400/10 text-red-400" :
+                  "bg-zinc-500/10 text-zinc-400"
+                )}>
+                  {STATUS_LABEL[bot.status]}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <Link href={`/projects/${botId}/editor`}>
+                <Button size="sm" className="h-7 px-3 text-[11px] gap-1.5">
+                  <Code2 className="size-3" />
+                  <span className="hidden sm:inline">Code Editor</span>
+                </Button>
+              </Link>
+            </div>
           </div>
 
-          {/* Folder row */}
-          <button
-            onClick={() => setFolderOpen((v) => !v)}
-            className="flex items-center gap-1 py-[4px] px-2 text-[12px] text-zinc-500 hover:text-zinc-300 hover:bg-white/5 w-full select-none"
-          >
-            {folderOpen
-              ? <ChevronDown className="size-3 shrink-0 text-zinc-500" />
-              : <ChevronRight className="size-3 shrink-0 text-zinc-500" />
-            }
-            <FolderOpen className="size-3.5 shrink-0 text-amber-400/70" />
-            <span className="truncate leading-none">{bot.name.toLowerCase().replace(/\s+/g, "-")}</span>
-          </button>
-
-          {/* File entries */}
-          {folderOpen && files.map((file, idx) => (
-            <div
-              key={idx}
-              onClick={() => { if (renamingIdx !== idx) setActiveIdx(idx); }}
-              onMouseEnter={() => setHoveredIdx(idx)}
-              onMouseLeave={() => setHoveredIdx(null)}
-              className={cn(
-                "group flex items-center gap-1 py-[4px] text-[12px] select-none cursor-default relative",
-                activeIdx === idx
-                  ? "bg-white/10 text-zinc-100"
-                  : "text-zinc-500 hover:text-zinc-300 hover:bg-white/5"
-              )}
-              style={{ paddingLeft: "20px" }}
-            >
-              <span className="w-3 shrink-0" />
-              <FileCode className="size-3.5 shrink-0 text-blue-400/70 shrink-0" />
-
-              {renamingIdx === idx ? (
-                <input
-                  ref={renameInputRef}
-                  value={renameValue}
-                  onChange={(e) => setRenameValue(e.target.value)}
-                  onBlur={handleCommitRename}
-                  onKeyDown={handleRenameKey}
-                  onClick={(e) => e.stopPropagation()}
-                  className="flex-1 min-w-0 bg-zinc-800 text-zinc-100 text-[11px] font-mono px-1 rounded outline-none border border-blue-500/60 leading-none"
-                />
-              ) : (
-                <span className="truncate leading-none flex-1 min-w-0">{file.name}</span>
-              )}
-
-              {/* Hover action buttons */}
-              {hoveredIdx === idx && renamingIdx !== idx && (
-                <span className="flex items-center gap-0.5 absolute right-1">
-                  <button
-                    onClick={(e) => handleStartRename(idx, e)}
-                    title="Umbenennen"
-                    className="text-zinc-600 hover:text-zinc-200 p-0.5 rounded"
-                  >
-                    <Pencil className="size-2.5" />
-                  </button>
-                  {files.length > 1 && (
-                    <button
-                      onClick={(e) => handleDeleteFile(idx, e)}
-                      title="Löschen"
-                      className="text-zinc-600 hover:text-red-400 p-0.5 rounded"
-                    >
-                      <Trash2 className="size-2.5" />
-                    </button>
-                  )}
-                </span>
-              )}
-            </div>
-          ))}
-        </div>
-
-        {/* Editor area */}
-        <div className="flex-1 flex flex-col min-w-0">
-          {/* Tab bar */}
-          <div className="flex border-b border-white/8 bg-black/10 shrink-0 overflow-x-auto">
-            {files.map((file, idx) => (
+          {/* Tabs */}
+          <div className="flex items-center gap-1 overflow-x-auto scrollbar-none">
+            {TABS.map(({ key, label, icon: Icon }) => (
               <button
-                key={idx}
-                onClick={() => setActiveIdx(idx)}
+                key={key}
+                onClick={() => setTab(key)}
                 className={cn(
-                  "flex items-center gap-1.5 px-4 py-1.5 border-r border-white/8 text-[12px] whitespace-nowrap shrink-0 transition-colors",
-                  activeIdx === idx
-                    ? "bg-white/5 text-zinc-300"
-                    : "text-zinc-600 hover:text-zinc-400 hover:bg-white/3"
+                  "flex items-center gap-1.5 px-3 py-2.5 text-[12px] font-medium whitespace-nowrap border-b-2 transition-colors",
+                  tab === key
+                    ? "border-foreground text-foreground"
+                    : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
                 )}
               >
-                <FileCode className="size-3 text-blue-400/80 shrink-0" />
-                <span>{file.name}</span>
-                {files.length > 1 && (
-                  <X
-                    className="size-2.5 ml-1 text-zinc-600 hover:text-zinc-300"
-                    onClick={(e) => handleDeleteFile(idx, e)}
-                  />
-                )}
+                <Icon className="size-3.5" />
+                {label}
               </button>
             ))}
           </div>
-
-          {/* Syntax-highlighted editor */}
-          <div className="flex-1 overflow-auto min-h-0">
-            <div className="relative min-h-full">
-              {/* Invisible spacer — sets content height */}
-              <pre
-                aria-hidden
-                className="invisible p-4 m-0 font-mono text-[13px] leading-[1.75] whitespace-pre"
-                style={{ minWidth: "100%" }}
-              >
-                {code + "\n"}
-              </pre>
-
-              {/* Highlighted code layer */}
-              <pre
-                aria-hidden
-                className="absolute inset-0 p-4 m-0 font-mono text-[13px] leading-[1.75] whitespace-pre pointer-events-none text-[#abb2bf]"
-              >
-                <code><Highlighted tokens={tokens} /></code>
-              </pre>
-
-              {/* Input layer */}
-              <textarea
-                ref={textareaRef}
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                onKeyDown={handleKeyDown}
-                className="absolute inset-0 w-full h-full bg-transparent font-mono text-[13px] leading-[1.75] p-4 resize-none focus:outline-none"
-                style={{ color: "transparent", caretColor: "#c8cdd4" }}
-                spellCheck={false}
-                autoCorrect="off"
-                autoCapitalize="off"
-              />
-            </div>
-          </div>
         </div>
       </div>
 
-      {/* Bottom bar */}
-      <div className="shrink-0 border-t border-white/8 bg-black/40 px-4 py-2.5 flex items-center gap-3">
-        <div className="flex-1 relative max-w-sm">
-          <Input
-            type={showToken ? "text" : "password"}
-            placeholder="Bot Token — für Deploy"
-            value={token}
-            onChange={(e) => { setToken(e.target.value); setDeployError(""); setDeploySuccess(false); }}
-            className="h-7 pr-8 font-mono text-[11px] bg-white/5 border-white/10 text-zinc-300 placeholder:text-zinc-600 focus-visible:ring-primary/40"
+      {/* Content */}
+      <div className={cn("max-w-6xl mx-auto px-4 sm:px-6", tab === "database" ? "py-4" : "py-6")}>
+        {tab === "overview" && (
+          <OverviewTab
+            bot={bot}
+            onStart={handleStart}
+            onStop={handleStop}
+            onRestart={handleRestart}
+            actionState={actionState}
           />
-          <button
-            type="button"
-            onClick={() => setShowToken((v) => !v)}
-            className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-600 hover:text-zinc-300"
-          >
-            {showToken ? <EyeOff className="size-3" /> : <Eye className="size-3" />}
-          </button>
-        </div>
-
-        {deployError && (
-          <div className="flex items-center gap-1.5 text-[11px] text-red-400">
-            <AlertCircle className="size-3 shrink-0" />
-            {deployError}
-          </div>
         )}
-        {deploySuccess && (
-          <div className="flex items-center gap-1.5 text-[11px] text-emerald-400">
-            <CheckCircle2 className="size-3 shrink-0" />
-            Bot läuft!
-          </div>
-        )}
-
-        <div className="ml-auto flex items-center gap-2">
-          <span className={cn("size-2 rounded-full", bot.status === "running" ? "bg-emerald-400" : "bg-zinc-600")} />
-          <span className="text-[11px] text-zinc-500">
-            {bot.status === "running" ? "Online" : "Offline"}
-          </span>
-          <Button size="sm" className="h-7 gap-1.5 text-[11px]" onClick={handleDeploy} disabled={deploying}>
-            {deploying ? (
-              <><RotateCcw className="size-3 animate-spin" />Deploying…</>
-            ) : (
-              <><Rocket className="size-3" />Deployen</>
-            )}
-          </Button>
-        </div>
+        {tab === "database" && <DatabaseTab botId={botId} />}
+        {tab === "logs" && <LogsTab botId={botId} />}
+        {tab === "settings" && <SettingsTab bot={bot} onUpdate={updateBot} onDelete={handleDelete} />}
       </div>
     </div>
   );
