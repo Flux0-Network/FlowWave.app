@@ -9,7 +9,7 @@ import {
   ChevronRight, Table2, Search, RefreshCw, Plug, Trash2,
   ChevronLeft, ChevronRight as ChevronRightIcon, X, Eye, EyeOff,
   KeyRound, Plus, Copy, Check, Package, PackagePlus, ExternalLink,
-  HardDrive, FolderPlus, Upload, FolderOpen, FileText, Download, Pencil,
+  HardDrive, FolderPlus, FolderOpen, FileText,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -47,12 +47,7 @@ interface SupabaseConn {
   serviceKey?: string;
 }
 
-// ── File storage types ────────────────────────────────────────────────────────
-interface StorageItem {
-  id: string; name: string; type: "file" | "folder";
-  parentId: string | null; size: number; mimeType: string;
-  content: string; createdAt: string;
-}
+// ── File storage helpers ──────────────────────────────────────────────────────
 const MAX_STORAGE_BYTES = 25 * 1024 * 1024;
 function formatBytes(n: number) {
   if (n === 0) return "0 B";
@@ -106,21 +101,16 @@ function UsageSection({ botId }: { botId: string }) {
   const [metrics, setMetrics] = useState({ storageBytes: 0, storageFiles: 0, packages: 0, envVars: 0 });
 
   useEffect(() => {
-    let storageBytes = 0, storageFiles = 0;
-    try {
-      const items: StorageItem[] = JSON.parse(localStorage.getItem(`flowwave:storage:${botId}`) ?? "[]");
-      storageFiles = items.filter((i) => i.type === "file").length;
-      storageBytes = items.filter((i) => i.type === "file").reduce((s, i) => s + i.size, 0);
-    } catch {}
-
-    let packages = 0;
+    let storageBytes = 0, storageFiles = 0, packages = 0;
     try {
       const bots = JSON.parse(localStorage.getItem("cogsforge:bots") ?? "[]");
       const bot = bots.find((b: BotProject) => b.id === botId);
       if (bot?.code) {
-        const files = JSON.parse(bot.code);
+        const files: { name: string; content: string }[] = JSON.parse(bot.code);
         if (Array.isArray(files)) {
-          const req = files.find((f: { name: string }) => f.name === "requirements.txt");
+          storageFiles = files.length;
+          storageBytes = files.reduce((s, f) => s + new TextEncoder().encode(f.content).length, 0);
+          const req = files.find((f) => f.name === "requirements.txt");
           if (req) packages = parseRequirements(req.content).length;
         }
       }
@@ -1236,187 +1226,158 @@ function SqlEditor({ sql, onSqlChange, onRun, loading, rows, cols, error, hasSer
 
 // ── Storage Tab ───────────────────────────────────────────────────────────────
 function StorageTab({ botId }: { botId: string }) {
-  const STORE_KEY = `flowwave:storage:${botId}`;
-  const [items, setItems] = useState<StorageItem[]>([]);
-  const [folderId, setFolderId] = useState<string | null>(null);
-  const [crumbs, setCrumbs] = useState<{ id: string | null; name: string }[]>([
-    { id: null, name: "Dateien" },
-  ]);
+  const BOTS_KEY = "cogsforge:bots";
+  const FOLDERS_KEY = `flowwave:folders:${botId}`;
+
+  const [files, setFiles] = useState<{ name: string; content: string }[]>([]);
+  const [emptyFolders, setEmptyFolders] = useState<string[]>([]);
+  const [currentPath, setCurrentPath] = useState("");
+  const [crumbs, setCrumbs] = useState<string[]>([]);
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
-  const [renameId, setRenameId] = useState<string | null>(null);
-  const [renameName, setRenameName] = useState("");
+  const [creatingFile, setCreatingFile] = useState(false);
+  const [newFileName, setNewFileName] = useState("");
   const [error, setError] = useState("");
-  const [uploading, setUploading] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(() => {
-    try { setItems(JSON.parse(localStorage.getItem(STORE_KEY) ?? "[]")); }
-    catch { setItems([]); }
-  }, [STORE_KEY]);
+    try {
+      const bots = JSON.parse(localStorage.getItem(BOTS_KEY) ?? "[]");
+      const bot = bots.find((b: BotProject) => b.id === botId);
+      if (bot?.code) {
+        const parsed = JSON.parse(bot.code);
+        setFiles(Array.isArray(parsed) ? parsed : []);
+      } else { setFiles([]); }
+    } catch { setFiles([]); }
+    try { setEmptyFolders(JSON.parse(localStorage.getItem(FOLDERS_KEY) ?? "[]")); }
+    catch { setEmptyFolders([]); }
+  }, [botId]);
+
   useEffect(() => { load(); }, [load]);
 
-  const persist = (next: StorageItem[]) => {
-    setItems(next);
-    try { localStorage.setItem(STORE_KEY, JSON.stringify(next)); setError(""); }
-    catch { setError("Speicherlimit überschritten. Lösche Dateien um Platz freizugeben."); }
+  const saveFiles = (next: { name: string; content: string }[]) => {
+    const bots = JSON.parse(localStorage.getItem(BOTS_KEY) ?? "[]");
+    const updated = bots.map((b: BotProject) => b.id === botId ? { ...b, code: JSON.stringify(next) } : b);
+    localStorage.setItem(BOTS_KEY, JSON.stringify(updated));
+    setFiles(next);
   };
 
-  const totalUsed = items.filter((i) => i.type === "file").reduce((s, i) => s + i.size, 0);
-  const current = items.filter((i) => i.parentId === folderId);
-  const sorted = [
-    ...current.filter((i) => i.type === "folder").sort((a, b) => a.name.localeCompare(b.name)),
-    ...current.filter((i) => i.type === "file").sort((a, b) => a.name.localeCompare(b.name)),
-  ];
+  const saveFolders = (next: string[]) => {
+    localStorage.setItem(FOLDERS_KEY, JSON.stringify(next));
+    setEmptyFolders(next);
+  };
 
-  const navigateTo = (id: string | null, name: string) => {
-    if (id === null) {
-      setCrumbs([{ id: null, name: "Dateien" }]);
-      setFolderId(null);
-    } else {
-      const idx = crumbs.findIndex((c) => c.id === id);
-      if (idx >= 0) {
-        setCrumbs(crumbs.slice(0, idx + 1));
-      } else {
-        setCrumbs((prev) => [...prev, { id, name }]);
-      }
-      setFolderId(id);
+  const prefix = currentPath ? currentPath + "/" : "";
+  const childFolderNames = new Set<string>();
+  const childFiles: { name: string; content: string }[] = [];
+
+  for (const f of emptyFolders) {
+    const seg = prefix ? (f.startsWith(prefix) ? f.slice(prefix.length) : null) : f;
+    if (seg !== null && !seg.includes("/") && seg) childFolderNames.add(seg);
+  }
+  for (const file of files) {
+    if (!prefix) {
+      const parts = file.name.split("/");
+      if (parts.length === 1) childFiles.push(file);
+      else childFolderNames.add(parts[0]);
+    } else if (file.name.startsWith(prefix)) {
+      const rest = file.name.slice(prefix.length);
+      const parts = rest.split("/");
+      if (parts.length === 1) childFiles.push(file);
+      else childFolderNames.add(parts[0]);
     }
-    setCreatingFolder(false);
-    setRenameId(null);
-    setError("");
+  }
+
+  const sortedFolders = [...childFolderNames].sort();
+  const sortedFiles = [...childFiles].sort((a, b) => a.name.localeCompare(b.name));
+
+  const navigateTo = (path: string) => {
+    setCurrentPath(path);
+    setCrumbs(path ? path.split("/") : []);
+    setCreatingFolder(false); setCreatingFile(false); setError("");
   };
 
   const handleCreateFolder = () => {
-    const name = newFolderName.trim();
+    const name = newFolderName.trim().replace(/\//g, "");
     if (!name) return;
-    if (current.filter((i) => i.type === "folder").some((f) => f.name.toLowerCase() === name.toLowerCase())) {
-      setError(`Ordner "${name}" existiert bereits.`); return;
-    }
-    persist([...items, {
-      id: crypto.randomUUID(), name, type: "folder",
-      parentId: folderId, size: 0, mimeType: "",
-      content: "", createdAt: new Date().toISOString(),
-    }]);
-    setNewFolderName(""); setCreatingFolder(false);
+    const fullPath = prefix + name;
+    if (childFolderNames.has(name)) { setError(`Ordner "${name}" existiert bereits.`); return; }
+    saveFolders([...emptyFolders, fullPath]);
+    setNewFolderName(""); setCreatingFolder(false); setError("");
   };
 
-  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files?.length) return;
-    setUploading(true);
-    const newItems: StorageItem[] = [];
-    let used = totalUsed;
-    for (const file of Array.from(files)) {
-      if (used + file.size > MAX_STORAGE_BYTES) { setError("Speicherlimit (25 MB) überschritten."); break; }
-      const content = await new Promise<string>((res) => {
-        const reader = new FileReader();
-        reader.onload = () => res(reader.result as string);
-        reader.readAsDataURL(file);
-      });
-      newItems.push({
-        id: crypto.randomUUID(), name: file.name, type: "file",
-        parentId: folderId, size: file.size,
-        mimeType: file.type || "application/octet-stream",
-        content, createdAt: new Date().toISOString(),
-      });
-      used += file.size;
-    }
-    if (newItems.length) persist([...items, ...newItems]);
-    setUploading(false);
-    e.target.value = "";
+  const handleCreateFile = () => {
+    const name = newFileName.trim().replace(/\//g, "");
+    if (!name) return;
+    const fullName = prefix + name;
+    if (files.some((f) => f.name === fullName)) { setError(`Datei "${name}" existiert bereits.`); return; }
+    saveFiles([...files, { name: fullName, content: "" }]);
+    setNewFileName(""); setCreatingFile(false); setError("");
   };
 
-  const handleDownload = (item: StorageItem) => {
-    const a = document.createElement("a");
-    a.href = item.content;
-    a.download = item.name;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+  const handleDeleteFile = (fileName: string) => saveFiles(files.filter((f) => f.name !== fileName));
+
+  const handleDeleteFolder = (folderName: string) => {
+    const folderPath = prefix + folderName;
+    const fp = folderPath + "/";
+    saveFiles(files.filter((f) => f.name !== folderPath && !f.name.startsWith(fp)));
+    saveFolders(emptyFolders.filter((f) => f !== folderPath && !f.startsWith(fp)));
   };
 
-  const handleDelete = (id: string) => {
-    const toDelete = new Set<string>([id]);
-    const queue = [id];
-    while (queue.length) {
-      const curr = queue.shift()!;
-      items.filter((i) => i.parentId === curr).forEach((i) => { toDelete.add(i.id); queue.push(i.id); });
-    }
-    persist(items.filter((i) => !toDelete.has(i.id)));
-  };
-
-  const handleCommitRename = (id: string) => {
-    const name = renameName.trim();
-    if (name) persist(items.map((i) => i.id === id ? { ...i, name } : i));
-    setRenameId(null);
-  };
-
-  const getIcon = (item: StorageItem) => {
-    if (item.type === "folder") return <FolderOpen className="size-4 text-yellow-400 shrink-0" />;
-    if (item.mimeType.startsWith("image/")) return <span className="text-sm shrink-0 leading-none">🖼️</span>;
-    if (item.mimeType.startsWith("audio/")) return <span className="text-sm shrink-0 leading-none">🎵</span>;
-    if (item.mimeType.startsWith("video/")) return <span className="text-sm shrink-0 leading-none">🎬</span>;
-    return <FileText className="size-4 text-muted-foreground shrink-0" />;
-  };
-
-  const pct = totalUsed / MAX_STORAGE_BYTES;
+  const fileSize = (f: { content: string }) => new TextEncoder().encode(f.content).length;
+  const totalBytes = files.reduce((s, f) => s + fileSize(f), 0);
+  const pct = totalBytes / MAX_STORAGE_BYTES;
 
   return (
     <div className="space-y-4 max-w-3xl">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-semibold">Dateispeicher</h3>
+          <h3 className="text-sm font-semibold">Projektdateien</h3>
           <p className="text-[11px] text-muted-foreground mt-0.5">
-            {formatBytes(totalUsed)} von 25 MB · {items.filter((i) => i.type === "file").length} Dateien
+            {formatBytes(totalBytes)} · {files.length} Dateien · Änderungen wirken sich im Editor aus
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            size="sm" variant="outline" className="h-7 text-[11px] gap-1.5"
-            onClick={() => { setCreatingFolder(true); setNewFolderName(""); }}
-          >
+          <Button size="sm" variant="outline" className="h-7 text-[11px] gap-1.5"
+            onClick={() => { setCreatingFolder(true); setNewFolderName(""); }}>
             <FolderPlus className="size-3" />Ordner
           </Button>
-          <Button
-            size="sm" className="h-7 text-[11px] gap-1.5"
-            onClick={() => fileInputRef.current?.click()} disabled={uploading}
-          >
-            <Upload className={cn("size-3", uploading && "animate-bounce")} />
-            {uploading ? "Lädt…" : "Hochladen"}
+          <Button size="sm" variant="outline" className="h-7 text-[11px] gap-1.5"
+            onClick={() => { setCreatingFile(true); setNewFileName(""); }}>
+            <Plus className="size-3" />Datei
           </Button>
-          <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleUpload} />
+          <Link href={`/projects/${botId}/editor`}>
+            <Button size="sm" className="h-7 text-[11px] gap-1.5">
+              <Code2 className="size-3" />Editor öffnen
+            </Button>
+          </Link>
         </div>
       </div>
 
-      {/* Storage bar */}
       <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
-        <div
-          className={cn("h-full rounded-full transition-all", pct > 0.8 ? "bg-red-400" : "bg-blue-400")}
-          style={{ width: `${Math.min(pct * 100, 100)}%` }}
-        />
+        <div className={cn("h-full rounded-full transition-all", pct > 0.8 ? "bg-red-400" : "bg-blue-400")}
+          style={{ width: `${Math.min(pct * 100, 100)}%` }} />
       </div>
 
-      {/* Breadcrumb */}
       <div className="flex items-center gap-1 text-[11px] flex-wrap">
-        {crumbs.map((crumb, i) => (
-          <span key={i} className="flex items-center gap-1">
-            {i > 0 && <ChevronRight className="size-3 text-muted-foreground/50" />}
-            <button
-              onClick={() => navigateTo(crumb.id, crumb.name)}
-              className={cn(
-                "hover:text-foreground transition-colors",
-                i === crumbs.length - 1 ? "text-foreground font-medium" : "text-muted-foreground"
-              )}
-            >
-              {crumb.name}
-            </button>
-          </span>
-        ))}
+        <button onClick={() => navigateTo("")}
+          className={cn("hover:text-foreground transition-colors", !currentPath ? "text-foreground font-medium" : "text-muted-foreground")}>
+          Dateien
+        </button>
+        {crumbs.map((crumb, i) => {
+          const pathUpTo = crumbs.slice(0, i + 1).join("/");
+          return (
+            <span key={i} className="flex items-center gap-1">
+              <ChevronRight className="size-3 text-muted-foreground/50" />
+              <button onClick={() => navigateTo(pathUpTo)}
+                className={cn("hover:text-foreground transition-colors",
+                  i === crumbs.length - 1 ? "text-foreground font-medium" : "text-muted-foreground")}>
+                {crumb}
+              </button>
+            </span>
+          );
+        })}
       </div>
 
-      {/* Error banner */}
       {error && (
         <div className="flex items-center gap-2 text-[11px] text-red-400 rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2">
           <AlertCircle className="size-3.5 shrink-0" />
@@ -1425,21 +1386,13 @@ function StorageTab({ botId }: { botId: string }) {
         </div>
       )}
 
-      {/* Create folder row */}
       {creatingFolder && (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-primary/40 bg-card">
           <FolderOpen className="size-4 text-yellow-400 shrink-0" />
-          <input
-            autoFocus
-            value={newFolderName}
-            onChange={(e) => setNewFolderName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") handleCreateFolder();
-              if (e.key === "Escape") { setCreatingFolder(false); setError(""); }
-            }}
+          <input autoFocus value={newFolderName} onChange={(e) => setNewFolderName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") handleCreateFolder(); if (e.key === "Escape") { setCreatingFolder(false); setError(""); } }}
             placeholder="Ordnername…"
-            className="flex-1 bg-transparent text-[12px] focus:outline-none text-foreground"
-          />
+            className="flex-1 bg-transparent text-[12px] focus:outline-none text-foreground" />
           <Button size="sm" className="h-6 px-2 text-[10px]" onClick={handleCreateFolder}>Erstellen</Button>
           <button onClick={() => { setCreatingFolder(false); setError(""); }} className="text-muted-foreground hover:text-foreground">
             <X className="size-3.5" />
@@ -1447,77 +1400,72 @@ function StorageTab({ botId }: { botId: string }) {
         </div>
       )}
 
-      {/* File list */}
+      {creatingFile && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-primary/40 bg-card">
+          <FileText className="size-4 text-blue-400 shrink-0" />
+          <input autoFocus value={newFileName} onChange={(e) => setNewFileName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") handleCreateFile(); if (e.key === "Escape") { setCreatingFile(false); setError(""); } }}
+            placeholder="dateiname.py…"
+            className="flex-1 bg-transparent text-[12px] focus:outline-none text-foreground" />
+          <Button size="sm" className="h-6 px-2 text-[10px]" onClick={handleCreateFile}>Erstellen</Button>
+          <button onClick={() => { setCreatingFile(false); setError(""); }} className="text-muted-foreground hover:text-foreground">
+            <X className="size-3.5" />
+          </button>
+        </div>
+      )}
+
       <div className="rounded-xl border border-border bg-card overflow-hidden">
-        {sorted.length === 0 && !creatingFolder ? (
+        {sortedFolders.length === 0 && sortedFiles.length === 0 && !creatingFolder && !creatingFile ? (
           <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
             <HardDrive className="size-8 text-muted-foreground/30" />
-            <p className="text-[12px] text-muted-foreground">Dieser Ordner ist leer.</p>
-            <p className="text-[11px] text-muted-foreground/60">Lade Dateien hoch oder erstelle einen Unterordner.</p>
+            <p className="text-[12px] text-muted-foreground">Keine Dateien vorhanden.</p>
+            <p className="text-[11px] text-muted-foreground/60">Erstelle Dateien im Editor oder füge sie hier hinzu.</p>
           </div>
         ) : (
           <>
             <div className="grid grid-cols-[auto_1fr_auto_auto] text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-4 py-2 border-b border-border bg-muted/40 gap-3">
-              <span className="w-4" />
-              <span>Name</span>
-              <span className="text-right">Größe</span>
-              <span className="w-16" />
+              <span className="w-4" /><span>Name</span><span className="text-right">Größe</span><span className="w-16" />
             </div>
             <div className="divide-y divide-border/40">
-              {sorted.map((item) => (
-                <div
-                  key={item.id}
-                  className="grid grid-cols-[auto_1fr_auto_auto] items-center px-4 py-2.5 hover:bg-accent/20 group transition-colors gap-3"
-                >
-                  {getIcon(item)}
-                  <div className="min-w-0">
-                    {renameId === item.id ? (
-                      <input
-                        autoFocus
-                        value={renameName}
-                        onChange={(e) => setRenameName(e.target.value)}
-                        onBlur={() => handleCommitRename(item.id)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") handleCommitRename(item.id);
-                          if (e.key === "Escape") setRenameId(null);
-                        }}
-                        className="text-[12px] bg-background border border-primary/40 rounded px-1.5 py-0.5 focus:outline-none w-full max-w-xs"
-                      />
-                    ) : (
-                      <button
-                        className={cn(
-                          "text-[12px] text-foreground/80 hover:text-foreground transition-colors text-left truncate max-w-xs block",
-                          item.type === "folder" && "font-medium"
-                        )}
-                        onClick={() => item.type === "folder" && navigateTo(item.id, item.name)}
-                      >
-                        {item.name}
+              {sortedFolders.map((folderName) => {
+                const folderPath = prefix + folderName;
+                const fp = folderPath + "/";
+                const childCount = files.filter((f) => f.name.startsWith(fp)).length +
+                  emptyFolders.filter((f) => f.startsWith(fp)).length;
+                return (
+                  <div key={folderName} className="grid grid-cols-[auto_1fr_auto_auto] items-center px-4 py-2.5 hover:bg-accent/20 group transition-colors gap-3">
+                    <FolderOpen className="size-4 text-yellow-400 shrink-0" />
+                    <div className="min-w-0">
+                      <button className="text-[12px] text-foreground/80 hover:text-foreground transition-colors text-left truncate max-w-xs block font-medium"
+                        onClick={() => navigateTo(folderPath)}>
+                        {folderName}
                       </button>
-                    )}
-                    <p className="text-[10px] text-muted-foreground mt-0.5">
-                      {item.type === "folder"
-                        ? `${items.filter((i) => i.parentId === item.id).length} Elemente`
-                        : new Date(item.createdAt).toLocaleDateString("de-DE")}
-                    </p>
+                      <p className="text-[10px] text-muted-foreground mt-0.5">{childCount} Elemente</p>
+                    </div>
+                    <span className="text-[11px] text-muted-foreground font-mono text-right">—</span>
+                    <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity justify-end">
+                      <button onClick={() => handleDeleteFolder(folderName)} title="Löschen"
+                        className="p-1 text-muted-foreground hover:text-red-400 rounded">
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    </div>
                   </div>
-                  <span className="text-[11px] text-muted-foreground font-mono text-right">
-                    {item.type === "file" ? formatBytes(item.size) : "—"}
-                  </span>
+                );
+              })}
+              {sortedFiles.map((file) => (
+                <div key={file.name} className="grid grid-cols-[auto_1fr_auto_auto] items-center px-4 py-2.5 hover:bg-accent/20 group transition-colors gap-3">
+                  <FileText className="size-4 text-muted-foreground shrink-0" />
+                  <div className="min-w-0">
+                    <p className="text-[12px] text-foreground/80 truncate">{file.name.split("/").pop()}</p>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">{file.name}</p>
+                  </div>
+                  <span className="text-[11px] text-muted-foreground font-mono text-right">{formatBytes(fileSize(file))}</span>
                   <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity justify-end">
-                    {item.type === "file" && (
-                      <button onClick={() => handleDownload(item)} title="Herunterladen"
-                        className="p-1 text-muted-foreground hover:text-foreground rounded">
-                        <Download className="size-3.5" />
-                      </button>
-                    )}
-                    <button
-                      onClick={() => { setRenameId(item.id); setRenameName(item.name); }}
-                      title="Umbenennen"
-                      className="p-1 text-muted-foreground hover:text-foreground rounded"
-                    >
-                      <Pencil className="size-3.5" />
-                    </button>
-                    <button onClick={() => handleDelete(item.id)} title="Löschen"
+                    <Link href={`/projects/${botId}/editor`} title="Im Editor öffnen"
+                      className="p-1 text-muted-foreground hover:text-foreground rounded">
+                      <ExternalLink className="size-3.5" />
+                    </Link>
+                    <button onClick={() => handleDeleteFile(file.name)} title="Löschen"
                       className="p-1 text-muted-foreground hover:text-red-400 rounded">
                       <Trash2 className="size-3.5" />
                     </button>

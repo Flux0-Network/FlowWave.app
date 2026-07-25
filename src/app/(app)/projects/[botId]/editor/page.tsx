@@ -1,11 +1,11 @@
 "use client";
 
-import { use, useState, useEffect, useRef, useMemo, useCallback } from "react";
+import React, { use, useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
   ChevronRight, ChevronDown, FolderOpen, FileCode, ArrowLeft, Rocket, Save,
   Eye, EyeOff, RotateCcw, AlertCircle, CheckCircle2, Plus, Trash2, Pencil,
-  Check, X,
+  X, FolderPlus, Bot, Send, Loader2, Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -110,8 +110,23 @@ interface FileEntry {
   content: string;
 }
 
+type NodeKind = "file" | "folder";
+interface TreeNode {
+  kind: NodeKind;
+  name: string;
+  path: string;
+  fileIdx?: number;
+  children?: TreeNode[];
+}
+
+interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
 // ── Storage ──────────────────────────────────────────────────────────────────
 const STORAGE_KEY = "cogsforge:bots";
+const foldersKey = (id: string) => `flowwave:folders:${id}`;
 
 function loadBots(): BotProject[] {
   if (typeof window === "undefined") return [];
@@ -122,6 +137,48 @@ function loadBots(): BotProject[] {
 function saveBot(updated: BotProject) {
   const bots = loadBots().map((b) => (b.id === updated.id ? updated : b));
   localStorage.setItem(STORAGE_KEY, JSON.stringify(bots));
+}
+
+// ── Tree builder ─────────────────────────────────────────────────────────────
+function buildTree(files: FileEntry[], emptyFolders: string[]): TreeNode[] {
+  const folderMap = new Map<string, TreeNode>();
+  const root: TreeNode[] = [];
+
+  function ensureFolder(fp: string): TreeNode[] {
+    if (folderMap.has(fp)) return folderMap.get(fp)!.children!;
+    const parts = fp.split("/");
+    const node: TreeNode = { kind: "folder", name: parts[parts.length - 1], path: fp, children: [] };
+    folderMap.set(fp, node);
+    if (parts.length === 1) {
+      root.push(node);
+    } else {
+      const parentList = ensureFolder(parts.slice(0, -1).join("/"));
+      parentList.push(node);
+    }
+    return node.children!;
+  }
+
+  for (const fp of emptyFolders) ensureFolder(fp);
+
+  for (let i = 0; i < files.length; i++) {
+    const parts = files[i].name.split("/");
+    if (parts.length === 1) {
+      root.push({ kind: "file", name: parts[0], path: files[i].name, fileIdx: i });
+    } else {
+      const list = ensureFolder(parts.slice(0, -1).join("/"));
+      list.push({ kind: "file", name: parts[parts.length - 1], path: files[i].name, fileIdx: i });
+    }
+  }
+
+  function sort(nodes: TreeNode[]) {
+    nodes.sort((a, b) => {
+      if (a.kind !== b.kind) return a.kind === "folder" ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    nodes.forEach((n) => n.children && sort(n.children));
+  }
+  sort(root);
+  return root;
 }
 
 // ── Defaults ─────────────────────────────────────────────────────────────────
@@ -171,6 +228,138 @@ function Highlighted({ tokens }: { tokens: Token[] }) {
   );
 }
 
+// ── AI Assistant panel ────────────────────────────────────────────────────────
+function AiPanel({ fileName, fileContent }: { fileName: string; fileContent: string }) {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  const QUICK = [
+    "Erkläre diesen Code",
+    "Finde Bugs",
+    "Füge Error Handling hinzu",
+    "Optimiere den Code",
+  ];
+
+  const send = useCallback(async (text: string) => {
+    const userMsg = text.trim();
+    if (!userMsg || loading) return;
+    const next: ChatMessage[] = [...messages, { role: "user", content: userMsg }];
+    setMessages(next);
+    setInput("");
+    setLoading(true);
+    setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
+    try {
+      const res = await fetch("/api/ai/assist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: next, fileContent, fileName }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      setMessages([...next, { role: "assistant", content: data.text }]);
+    } catch (e) {
+      setMessages([...next, { role: "assistant", content: `Fehler: ${String(e)}` }]);
+    } finally {
+      setLoading(false);
+      setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
+    }
+  }, [messages, loading, fileContent, fileName]);
+
+  return (
+    <div className="flex flex-col h-full border-l border-white/8 bg-black/30 w-72 shrink-0">
+      {/* Header */}
+      <div className="flex items-center gap-2 px-3 py-2.5 border-b border-white/8 shrink-0">
+        <Sparkles className="size-3.5 text-violet-400 shrink-0" />
+        <span className="text-[11px] font-semibold text-zinc-300">KI-Assistent</span>
+        <span className="ml-auto text-[9px] text-zinc-600 font-mono">Claude</span>
+      </div>
+
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3 min-h-0">
+        {messages.length === 0 && (
+          <div className="space-y-2">
+            <p className="text-[11px] text-zinc-600 text-center py-2">
+              Frag mich etwas über deinen Code
+            </p>
+            <div className="space-y-1">
+              {QUICK.map((q) => (
+                <button
+                  key={q}
+                  onClick={() => send(q)}
+                  className="w-full text-left text-[11px] text-zinc-500 hover:text-zinc-300 hover:bg-white/5 px-2 py-1.5 rounded transition-colors border border-white/5 hover:border-white/10"
+                >
+                  {q}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {messages.map((m, i) => (
+          <div key={i} className={cn("text-[12px] leading-relaxed", m.role === "user" ? "text-zinc-400" : "text-zinc-200")}>
+            {m.role === "user" ? (
+              <div className="flex gap-2">
+                <span className="text-[9px] text-zinc-600 font-semibold uppercase tracking-wider mt-0.5 shrink-0">Du</span>
+                <p className="flex-1">{m.content}</p>
+              </div>
+            ) : (
+              <div className="flex gap-2">
+                <Sparkles className="size-3 text-violet-400 shrink-0 mt-0.5" />
+                <div className="flex-1 space-y-1.5 min-w-0">
+                  {m.content.split(/(```[\s\S]*?```)/g).map((part, j) => {
+                    if (part.startsWith("```")) {
+                      const code = part.replace(/^```\w*\n?/, "").replace(/```$/, "");
+                      return (
+                        <pre key={j} className="bg-black/40 border border-white/8 rounded p-2 text-[11px] font-mono text-zinc-300 overflow-x-auto whitespace-pre-wrap break-all">
+                          {code}
+                        </pre>
+                      );
+                    }
+                    return <p key={j} className="whitespace-pre-wrap">{part}</p>;
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+        {loading && (
+          <div className="flex items-center gap-2 text-zinc-600 text-[11px]">
+            <Loader2 className="size-3 animate-spin" />
+            Denkt nach…
+          </div>
+        )}
+        <div ref={bottomRef} />
+      </div>
+
+      {/* Input */}
+      <div className="shrink-0 border-t border-white/8 p-2">
+        <div className="flex gap-1.5 items-end">
+          <textarea
+            ref={inputRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input); }
+            }}
+            placeholder="Frage stellen… (Enter zum Senden)"
+            rows={2}
+            className="flex-1 bg-white/5 border border-white/10 rounded text-[11px] text-zinc-300 placeholder:text-zinc-600 px-2 py-1.5 resize-none focus:outline-none focus:border-violet-500/40 leading-relaxed"
+          />
+          <button
+            onClick={() => send(input)}
+            disabled={!input.trim() || loading}
+            className="p-1.5 rounded bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
+          >
+            <Send className="size-3 text-white" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Page ─────────────────────────────────────────────────────────────────────
 export default function EditorPage({ params }: { params: Promise<{ botId: string }> }) {
   const { botId } = use(params);
@@ -179,10 +368,14 @@ export default function EditorPage({ params }: { params: Promise<{ botId: string
   const [bot, setBot] = useState<BotProject | null>(null);
   const [files, setFiles] = useState<FileEntry[]>(DEFAULT_FILES);
   const [activeIdx, setActiveIdx] = useState(0);
-  const [folderOpen, setFolderOpen] = useState(true);
-  const [renamingIdx, setRenamingIdx] = useState<number | null>(null);
-  const [renameValue, setRenameValue] = useState("");
-  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+  const [openFolders, setOpenFolders] = useState<Set<string>>(new Set());
+  const [extraFolders, setExtraFolders] = useState<string[]>([]);
+  const [hoveredPath, setHoveredPath] = useState<string | null>(null);
+  const [renamingPath, setRenamingPath] = useState<string | null>(null);
+  const [renameName, setRenameName] = useState("");
+  const [creatingRootFolder, setCreatingRootFolder] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
+  const [showAi, setShowAi] = useState(false);
   const [token, setToken] = useState("");
   const [showToken, setShowToken] = useState(false);
   const [saved, setSaved] = useState(true);
@@ -190,22 +383,30 @@ export default function EditorPage({ params }: { params: Promise<{ botId: string
   const [deployError, setDeployError] = useState("");
   const [deploySuccess, setDeploySuccess] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const renameInputRef = useRef<HTMLInputElement>(null);
 
   const activeFile = files[activeIdx] ?? files[0];
   const code = activeFile?.content ?? "";
   const tokens = useMemo(() => tokenize(code), [code]);
+  const tree = useMemo(() => buildTree(files, extraFolders), [files, extraFolders]);
 
   useEffect(() => {
     const found = loadBots().find((b) => b.id === botId);
     if (!found) { router.push("/projects"); return; }
     setBot(found);
-    setFiles(parseFiles(found.code));
+    const parsed = parseFiles(found.code);
+    setFiles(parsed);
+    try {
+      const saved: string[] = JSON.parse(localStorage.getItem(foldersKey(botId)) ?? "[]");
+      setExtraFolders(saved);
+      const auto = new Set<string>();
+      parsed.forEach((f) => {
+        const parts = f.name.split("/");
+        for (let i = 1; i < parts.length; i++) auto.add(parts.slice(0, i).join("/"));
+      });
+      saved.forEach((fp) => auto.add(fp));
+      setOpenFolders(auto);
+    } catch {}
   }, [botId, router]);
-
-  useEffect(() => {
-    if (renamingIdx !== null) renameInputRef.current?.select();
-  }, [renamingIdx]);
 
   const setCode = useCallback((newCode: string) => {
     setFiles((prev) => prev.map((f, i) => i === activeIdx ? { ...f, content: newCode } : f));
@@ -218,8 +419,9 @@ export default function EditorPage({ params }: { params: Promise<{ botId: string
     const updated = { ...bot, code: JSON.stringify(files) };
     saveBot(updated);
     setBot(updated);
+    localStorage.setItem(foldersKey(botId), JSON.stringify(extraFolders));
     setSaved(true);
-  }, [bot, files]);
+  }, [bot, files, botId, extraFolders]);
 
   const handleDeploy = async () => {
     if (!bot || !token.trim()) { setDeployError("Token erforderlich."); return; }
@@ -265,56 +467,192 @@ export default function EditorPage({ params }: { params: Promise<{ botId: string
     }
   };
 
-  // ── File management ───────────────────────────────────────────────────────
-  const handleNewFile = () => {
-    const baseName = "neue_datei.py";
-    let name = baseName;
+  // ── File / folder management ──────────────────────────────────────────────
+  const handleNewFile = useCallback((folderPath?: string) => {
+    const prefix = folderPath ? `${folderPath}/` : "";
+    let base = "neue_datei.py";
+    let name = `${prefix}${base}`;
     let n = 1;
-    while (files.some((f) => f.name === name)) { name = `neue_datei_${n++}.py`; }
+    while (files.some((f) => f.name === name)) {
+      base = `neue_datei_${n++}.py`;
+      name = `${prefix}${base}`;
+    }
     const updated = [...files, { name, content: "" }];
     setFiles(updated);
-    const newIdx = updated.length - 1;
-    setActiveIdx(newIdx);
+    setActiveIdx(updated.length - 1);
     setSaved(false);
-    setRenamingIdx(newIdx);
-    setRenameValue(name);
-  };
+    setRenamingPath(name);
+    setRenameName(base);
+    if (folderPath) setOpenFolders((prev) => new Set([...prev, folderPath]));
+  }, [files]);
 
-  const handleDeleteFile = (idx: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (files.length <= 1) return;
-    const updated = files.filter((_, i) => i !== idx);
-    setFiles(updated);
-    setActiveIdx((prev) => (prev >= updated.length ? updated.length - 1 : prev === idx ? Math.max(0, idx - 1) : prev > idx ? prev - 1 : prev));
+  const handleDeleteByPath = useCallback((path: string, kind: NodeKind) => {
+    if (kind === "file") {
+      const idx = files.findIndex((f) => f.name === path);
+      if (idx === -1 || files.length <= 1) return;
+      const updated = files.filter((_, i) => i !== idx);
+      setFiles(updated);
+      setActiveIdx((prev) =>
+        prev > idx ? prev - 1 : prev === idx ? Math.max(0, idx - 1) : prev
+      );
+    } else {
+      const prefix = path + "/";
+      const updated = files.filter((f) => !f.name.startsWith(prefix));
+      if (updated.length === 0) return;
+      setFiles(updated);
+      setExtraFolders((prev) => prev.filter((fp) => !fp.startsWith(path)));
+      setOpenFolders((prev) => {
+        const next = new Set(prev);
+        for (const k of [...next]) { if (k === path || k.startsWith(prefix)) next.delete(k); }
+        return next;
+      });
+      setActiveIdx((prev) => Math.min(prev, Math.max(0, updated.length - 1)));
+    }
     setSaved(false);
-  };
+  }, [files]);
 
-  const handleStartRename = (idx: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setRenamingIdx(idx);
-    setRenameValue(files[idx].name);
-  };
+  const handleRenameCommit = useCallback(() => {
+    if (!renamingPath) return;
+    const seg = renameName.trim();
+    if (!seg) { setRenamingPath(null); return; }
+    const parts = renamingPath.split("/");
+    parts[parts.length - 1] = seg;
+    const newPath = parts.join("/");
+    const isFile = files.some((f) => f.name === renamingPath);
+    if (isFile) {
+      setFiles((prev) => prev.map((f) => f.name === renamingPath ? { ...f, name: newPath } : f));
+    } else {
+      const prefix = renamingPath + "/";
+      setFiles((prev) => prev.map((f) =>
+        f.name.startsWith(prefix) ? { ...f, name: newPath + f.name.slice(renamingPath.length) } : f
+      ));
+      setExtraFolders((prev) => prev.map((fp) =>
+        fp === renamingPath || fp.startsWith(prefix)
+          ? newPath + fp.slice(renamingPath.length) : fp
+      ));
+      setOpenFolders((prev) => {
+        const next = new Set<string>();
+        for (const k of prev) {
+          next.add(k === renamingPath || k.startsWith(prefix)
+            ? newPath + k.slice(renamingPath.length) : k);
+        }
+        return next;
+      });
+    }
+    setSaved(false);
+    setRenamingPath(null);
+  }, [renamingPath, renameName, files]);
 
-  const handleCommitRename = () => {
-    if (renamingIdx === null) return;
-    const trimmed = renameValue.trim();
-    if (trimmed) {
-      setFiles((prev) => prev.map((f, i) => i === renamingIdx ? { ...f, name: trimmed } : f));
+  const handleNewFolder = () => {
+    const name = newFolderName.trim();
+    if (!name) { setCreatingRootFolder(false); return; }
+    if (!extraFolders.includes(name) && !files.some((f) => f.name.startsWith(name + "/"))) {
+      setExtraFolders((prev) => [...prev, name]);
+      setOpenFolders((prev) => new Set([...prev, name]));
       setSaved(false);
     }
-    setRenamingIdx(null);
+    setNewFolderName("");
+    setCreatingRootFolder(false);
   };
 
-  const handleRenameKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") handleCommitRename();
-    if (e.key === "Escape") setRenamingIdx(null);
-  };
+  // ── Tree renderer (recursive, closure over state) ─────────────────────────
+  const renderTree = useCallback((nodes: TreeNode[], depth: number): React.ReactNode => {
+    return nodes.map((node) => {
+      const indent = depth * 12 + 8;
+      const isRen = renamingPath === node.path;
+      const isHov = hoveredPath === node.path;
+
+      if (node.kind === "folder") {
+        const isOpen = openFolders.has(node.path);
+        return (
+          <React.Fragment key={node.path}>
+            <div
+              style={{ paddingLeft: `${indent}px` }}
+              className="flex items-center gap-1 py-[4px] pr-1 text-[12px] text-zinc-500 hover:text-zinc-300 hover:bg-white/5 cursor-default select-none"
+              onClick={() => setOpenFolders((prev) => {
+                const next = new Set(prev);
+                if (next.has(node.path)) next.delete(node.path); else next.add(node.path);
+                return next;
+              })}
+              onMouseEnter={() => setHoveredPath(node.path)}
+              onMouseLeave={() => setHoveredPath(null)}
+            >
+              {isOpen
+                ? <ChevronDown className="size-3 shrink-0" />
+                : <ChevronRight className="size-3 shrink-0" />}
+              <FolderOpen className="size-3.5 shrink-0 text-amber-400/70" />
+              {isRen ? (
+                <input
+                  autoFocus
+                  value={renameName}
+                  onChange={(e) => setRenameName(e.target.value)}
+                  onBlur={handleRenameCommit}
+                  onKeyDown={(e) => { if (e.key === "Enter") handleRenameCommit(); if (e.key === "Escape") setRenamingPath(null); }}
+                  onClick={(e) => e.stopPropagation()}
+                  className="flex-1 min-w-0 bg-zinc-800 text-zinc-100 text-[11px] font-mono px-1 rounded outline-none border border-blue-500/60 leading-none"
+                />
+              ) : (
+                <span className="truncate leading-none flex-1 min-w-0">{node.name}</span>
+              )}
+              {isHov && !isRen && (
+                <span className="flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+                  <button onClick={() => handleNewFile(node.path)} title="Neue Datei" className="text-zinc-600 hover:text-zinc-200 p-0.5 rounded"><Plus className="size-2.5" /></button>
+                  <button onClick={() => { setRenamingPath(node.path); setRenameName(node.name); }} title="Umbenennen" className="text-zinc-600 hover:text-zinc-200 p-0.5 rounded"><Pencil className="size-2.5" /></button>
+                  <button onClick={() => handleDeleteByPath(node.path, "folder")} title="Löschen" className="text-zinc-600 hover:text-red-400 p-0.5 rounded"><Trash2 className="size-2.5" /></button>
+                </span>
+              )}
+            </div>
+            {isOpen && node.children && renderTree(node.children, depth + 1)}
+          </React.Fragment>
+        );
+      }
+
+      // File node
+      const isActive = node.fileIdx === activeIdx;
+      return (
+        <div
+          key={node.path}
+          style={{ paddingLeft: `${indent + 16}px` }}
+          className={cn(
+            "flex items-center gap-1 py-[4px] pr-1 text-[12px] select-none cursor-default",
+            isActive ? "bg-white/10 text-zinc-100" : "text-zinc-500 hover:text-zinc-300 hover:bg-white/5"
+          )}
+          onClick={() => { if (!isRen && node.fileIdx !== undefined) setActiveIdx(node.fileIdx); }}
+          onMouseEnter={() => setHoveredPath(node.path)}
+          onMouseLeave={() => setHoveredPath(null)}
+        >
+          <FileCode className="size-3.5 shrink-0 text-blue-400/70" />
+          {isRen ? (
+            <input
+              autoFocus
+              value={renameName}
+              onChange={(e) => setRenameName(e.target.value)}
+              onBlur={handleRenameCommit}
+              onKeyDown={(e) => { if (e.key === "Enter") handleRenameCommit(); if (e.key === "Escape") setRenamingPath(null); }}
+              onClick={(e) => e.stopPropagation()}
+              className="flex-1 min-w-0 bg-zinc-800 text-zinc-100 text-[11px] font-mono px-1 rounded outline-none border border-blue-500/60 leading-none"
+            />
+          ) : (
+            <span className="truncate leading-none flex-1 min-w-0">{node.name}</span>
+          )}
+          {isHov && !isRen && (
+            <span className="flex items-center gap-0.5 shrink-0">
+              <button onClick={(e) => { e.stopPropagation(); setRenamingPath(node.path); setRenameName(node.name); }} title="Umbenennen" className="text-zinc-600 hover:text-zinc-200 p-0.5 rounded"><Pencil className="size-2.5" /></button>
+              {files.length > 1 && (
+                <button onClick={(e) => { e.stopPropagation(); handleDeleteByPath(node.path, "file"); }} title="Löschen" className="text-zinc-600 hover:text-red-400 p-0.5 rounded"><Trash2 className="size-2.5" /></button>
+              )}
+            </span>
+          )}
+        </div>
+      );
+    });
+  }, [openFolders, renamingPath, renameName, hoveredPath, activeIdx, files, handleNewFile, handleDeleteByPath, handleRenameCommit]);
 
   if (!bot) return null;
 
   return (
     <div className="flex flex-col h-screen bg-[oklch(0.07_0.014_258)] text-zinc-300 overflow-hidden">
-      {/* Title bar — no macOS dots */}
+      {/* Title bar */}
       <div className="flex items-center gap-3 px-4 py-2.5 border-b border-white/8 bg-black/30 shrink-0">
         <Link
           href="/projects"
@@ -330,6 +668,17 @@ export default function EditorPage({ params }: { params: Promise<{ botId: string
           <span className={cn("text-[10px] px-1.5 py-0.5 rounded", saved ? "text-zinc-600" : "text-amber-400/80 bg-amber-400/10")}>
             {saved ? "Gespeichert" : "Ungespeichert"}
           </span>
+          <button
+            onClick={() => setShowAi((v) => !v)}
+            title="KI-Assistent"
+            className={cn(
+              "flex items-center gap-1 h-6 px-2 text-[11px] rounded transition-colors",
+              showAi ? "text-violet-300 bg-violet-500/20" : "text-zinc-500 hover:text-zinc-300 hover:bg-white/5"
+            )}
+          >
+            <Bot className="size-3" />
+            KI
+          </button>
           <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px] gap-1 text-zinc-400 hover:text-zinc-200" onClick={handleSave}>
             <Save className="size-3" />
             Speichern
@@ -345,83 +694,51 @@ export default function EditorPage({ params }: { params: Promise<{ botId: string
             <p className="text-[9px] text-zinc-600 font-semibold uppercase tracking-widest select-none">
               Explorer
             </p>
-            <button
-              onClick={handleNewFile}
-              title="Neue Datei"
-              className="text-zinc-600 hover:text-zinc-300 transition-colors"
-            >
-              <Plus className="size-3.5" />
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => { setCreatingRootFolder(true); setNewFolderName(""); }}
+                title="Neuer Ordner"
+                className="text-zinc-600 hover:text-zinc-300 transition-colors"
+              >
+                <FolderPlus className="size-3.5" />
+              </button>
+              <button
+                onClick={() => handleNewFile()}
+                title="Neue Datei"
+                className="text-zinc-600 hover:text-zinc-300 transition-colors"
+              >
+                <Plus className="size-3.5" />
+              </button>
+            </div>
           </div>
 
-          {/* Folder row */}
-          <button
-            onClick={() => setFolderOpen((v) => !v)}
-            className="flex items-center gap-1 py-[4px] px-2 text-[12px] text-zinc-500 hover:text-zinc-300 hover:bg-white/5 w-full select-none"
-          >
-            {folderOpen
-              ? <ChevronDown className="size-3 shrink-0 text-zinc-500" />
-              : <ChevronRight className="size-3 shrink-0 text-zinc-500" />
-            }
+          {/* Root folder label */}
+          <div className="flex items-center gap-1 py-[4px] px-2 text-[12px] text-zinc-500 select-none">
+            <ChevronDown className="size-3 shrink-0" />
             <FolderOpen className="size-3.5 shrink-0 text-amber-400/70" />
             <span className="truncate leading-none">{bot.name.toLowerCase().replace(/\s+/g, "-")}</span>
-          </button>
+          </div>
 
-          {/* File entries */}
-          {folderOpen && files.map((file, idx) => (
-            <div
-              key={idx}
-              onClick={() => { if (renamingIdx !== idx) setActiveIdx(idx); }}
-              onMouseEnter={() => setHoveredIdx(idx)}
-              onMouseLeave={() => setHoveredIdx(null)}
-              className={cn(
-                "group flex items-center gap-1 py-[4px] text-[12px] select-none cursor-default relative",
-                activeIdx === idx
-                  ? "bg-white/10 text-zinc-100"
-                  : "text-zinc-500 hover:text-zinc-300 hover:bg-white/5"
-              )}
-              style={{ paddingLeft: "20px" }}
-            >
-              <span className="w-3 shrink-0" />
-              <FileCode className="size-3.5 shrink-0 text-blue-400/70 shrink-0" />
-
-              {renamingIdx === idx ? (
-                <input
-                  ref={renameInputRef}
-                  value={renameValue}
-                  onChange={(e) => setRenameValue(e.target.value)}
-                  onBlur={handleCommitRename}
-                  onKeyDown={handleRenameKey}
-                  onClick={(e) => e.stopPropagation()}
-                  className="flex-1 min-w-0 bg-zinc-800 text-zinc-100 text-[11px] font-mono px-1 rounded outline-none border border-blue-500/60 leading-none"
-                />
-              ) : (
-                <span className="truncate leading-none flex-1 min-w-0">{file.name}</span>
-              )}
-
-              {/* Hover action buttons */}
-              {hoveredIdx === idx && renamingIdx !== idx && (
-                <span className="flex items-center gap-0.5 absolute right-1">
-                  <button
-                    onClick={(e) => handleStartRename(idx, e)}
-                    title="Umbenennen"
-                    className="text-zinc-600 hover:text-zinc-200 p-0.5 rounded"
-                  >
-                    <Pencil className="size-2.5" />
-                  </button>
-                  {files.length > 1 && (
-                    <button
-                      onClick={(e) => handleDeleteFile(idx, e)}
-                      title="Löschen"
-                      className="text-zinc-600 hover:text-red-400 p-0.5 rounded"
-                    >
-                      <Trash2 className="size-2.5" />
-                    </button>
-                  )}
-                </span>
-              )}
+          {/* Inline new folder input */}
+          {creatingRootFolder && (
+            <div className="flex items-center gap-1 py-[3px] px-3 ml-4">
+              <FolderOpen className="size-3.5 shrink-0 text-amber-400/50" />
+              <input
+                autoFocus
+                value={newFolderName}
+                onChange={(e) => setNewFolderName(e.target.value)}
+                onBlur={handleNewFolder}
+                onKeyDown={(e) => { if (e.key === "Enter") handleNewFolder(); if (e.key === "Escape") setCreatingRootFolder(false); }}
+                placeholder="Ordnername…"
+                className="flex-1 min-w-0 bg-zinc-800 text-zinc-100 text-[11px] font-mono px-1 rounded outline-none border border-blue-500/60 leading-none"
+              />
             </div>
-          ))}
+          )}
+
+          {/* Tree */}
+          <div className="flex-1 overflow-y-auto">
+            {renderTree(tree, 0)}
+          </div>
         </div>
 
         {/* Editor area */}
@@ -440,11 +757,11 @@ export default function EditorPage({ params }: { params: Promise<{ botId: string
                 )}
               >
                 <FileCode className="size-3 text-blue-400/80 shrink-0" />
-                <span>{file.name}</span>
+                <span>{file.name.split("/").pop()}</span>
                 {files.length > 1 && (
                   <X
                     className="size-2.5 ml-1 text-zinc-600 hover:text-zinc-300"
-                    onClick={(e) => handleDeleteFile(idx, e)}
+                    onClick={(e) => { e.stopPropagation(); handleDeleteByPath(file.name, "file"); }}
                   />
                 )}
               </button>
@@ -454,7 +771,6 @@ export default function EditorPage({ params }: { params: Promise<{ botId: string
           {/* Syntax-highlighted editor */}
           <div className="flex-1 overflow-auto min-h-0">
             <div className="relative min-h-full">
-              {/* Invisible spacer — sets content height */}
               <pre
                 aria-hidden
                 className="invisible p-4 m-0 font-mono text-[13px] leading-[1.75] whitespace-pre"
@@ -462,16 +778,12 @@ export default function EditorPage({ params }: { params: Promise<{ botId: string
               >
                 {code + "\n"}
               </pre>
-
-              {/* Highlighted code layer */}
               <pre
                 aria-hidden
                 className="absolute inset-0 p-4 m-0 font-mono text-[13px] leading-[1.75] whitespace-pre pointer-events-none text-[#abb2bf]"
               >
                 <code><Highlighted tokens={tokens} /></code>
               </pre>
-
-              {/* Input layer */}
               <textarea
                 ref={textareaRef}
                 value={code}
@@ -486,6 +798,9 @@ export default function EditorPage({ params }: { params: Promise<{ botId: string
             </div>
           </div>
         </div>
+
+        {/* AI Panel */}
+        {showAi && <AiPanel fileName={activeFile?.name ?? ""} fileContent={code} />}
       </div>
 
       {/* Bottom bar */}
