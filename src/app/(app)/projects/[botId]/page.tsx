@@ -9,6 +9,7 @@ import {
   ChevronRight, Table2, Search, RefreshCw, Plug, Trash2,
   ChevronLeft, ChevronRight as ChevronRightIcon, X, Eye, EyeOff,
   KeyRound, Plus, Copy, Check, Package, PackagePlus, ExternalLink,
+  HardDrive, FolderPlus, Upload, FolderOpen, FileText, Download, Pencil,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,7 +27,7 @@ interface BotProject {
   code: string;
 }
 
-type Tab = "overview" | "packages" | "env" | "database" | "logs" | "settings";
+type Tab = "overview" | "storage" | "packages" | "env" | "database" | "logs" | "settings";
 
 // ── Storage helpers ───────────────────────────────────────────────────────────
 const STORAGE_KEY = "cogsforge:bots";
@@ -44,6 +45,20 @@ interface SupabaseConn {
   url: string;
   anonKey: string;
   serviceKey?: string;
+}
+
+// ── File storage types ────────────────────────────────────────────────────────
+interface StorageItem {
+  id: string; name: string; type: "file" | "folder";
+  parentId: string | null; size: number; mimeType: string;
+  content: string; createdAt: string;
+}
+const MAX_STORAGE_BYTES = 25 * 1024 * 1024;
+function formatBytes(n: number) {
+  if (n === 0) return "0 B";
+  if (n < 1024) return `${n} B`;
+  if (n < 1048576) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1048576).toFixed(2)} MB`;
 }
 
 // ── Status helpers ────────────────────────────────────────────────────────────
@@ -70,6 +85,77 @@ function StatusDot({ status, ping = false }: { status: BotStatus; ping?: boolean
       )}
       <span className={cn("relative inline-flex rounded-full size-2", STATUS_DOT[status])} />
     </span>
+  );
+}
+
+// ── Usage ring ────────────────────────────────────────────────────────────────
+function UsageRing({ pct }: { pct: number }) {
+  const r = 9, circ = 2 * Math.PI * r;
+  const filled = Math.min(Math.max(pct, 0), 1) * circ;
+  const color = pct > 0.85 ? "#e06c75" : pct > 0.6 ? "#e5c07b" : "#61afef";
+  return (
+    <svg viewBox="0 0 26 26" className="size-6 shrink-0" style={{ transform: "rotate(-90deg)" }}>
+      <circle cx="13" cy="13" r={r} fill="none" stroke="currentColor" strokeWidth="3.5" className="text-muted-foreground/20" />
+      <circle cx="13" cy="13" r={r} fill="none" stroke={color} strokeWidth="3.5"
+        strokeDasharray={`${filled} ${circ - filled}`} strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function UsageSection({ botId }: { botId: string }) {
+  const [metrics, setMetrics] = useState({ storageBytes: 0, storageFiles: 0, packages: 0, envVars: 0 });
+
+  useEffect(() => {
+    let storageBytes = 0, storageFiles = 0;
+    try {
+      const items: StorageItem[] = JSON.parse(localStorage.getItem(`flowwave:storage:${botId}`) ?? "[]");
+      storageFiles = items.filter((i) => i.type === "file").length;
+      storageBytes = items.filter((i) => i.type === "file").reduce((s, i) => s + i.size, 0);
+    } catch {}
+
+    let packages = 0;
+    try {
+      const bots = JSON.parse(localStorage.getItem("cogsforge:bots") ?? "[]");
+      const bot = bots.find((b: BotProject) => b.id === botId);
+      if (bot?.code) {
+        const files = JSON.parse(bot.code);
+        if (Array.isArray(files)) {
+          const req = files.find((f: { name: string }) => f.name === "requirements.txt");
+          if (req) packages = parseRequirements(req.content).length;
+        }
+      }
+    } catch {}
+
+    let envVars = 0;
+    try { envVars = JSON.parse(localStorage.getItem(`flowwave:env:${botId}`) ?? "[]").length; }
+    catch {}
+
+    setMetrics({ storageBytes, storageFiles, packages, envVars });
+  }, [botId]);
+
+  const rows = [
+    { label: "Speicher",        value: formatBytes(metrics.storageBytes), limit: "25 MB",  pct: metrics.storageBytes / MAX_STORAGE_BYTES },
+    { label: "Dateien",         value: String(metrics.storageFiles),      limit: "100",    pct: metrics.storageFiles / 100 },
+    { label: "Pakete",          value: String(metrics.packages),          limit: "20",     pct: metrics.packages / 20 },
+    { label: "Env Variables",   value: String(metrics.envVars),           limit: "50",     pct: metrics.envVars / 50 },
+  ];
+
+  return (
+    <div className="rounded-xl border border-border bg-card overflow-hidden">
+      <div className="px-5 py-3 border-b border-border/60 flex items-center justify-between">
+        <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Nutzung</p>
+        <p className="text-[10px] text-muted-foreground">Aktuell</p>
+      </div>
+      <div className="divide-y divide-border/40">
+        {rows.map(({ label, value, limit, pct }) => (
+          <div key={label} className="flex items-center gap-4 px-5 py-3 hover:bg-accent/10 transition-colors">
+            <UsageRing pct={pct} />
+            <span className="flex-1 text-[12px] text-foreground/80">{label}</span>
+            <span className="text-[12px] font-mono text-muted-foreground">{value} / {limit}</span>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -183,6 +269,8 @@ function OverviewTab({ bot, onStart, onStop, onRestart, actionState }: {
           </div>
         </div>
       )}
+
+      <UsageSection botId={bot.id} />
     </div>
   );
 }
@@ -1146,6 +1234,304 @@ function SqlEditor({ sql, onSqlChange, onRun, loading, rows, cols, error, hasSer
   );
 }
 
+// ── Storage Tab ───────────────────────────────────────────────────────────────
+function StorageTab({ botId }: { botId: string }) {
+  const STORE_KEY = `flowwave:storage:${botId}`;
+  const [items, setItems] = useState<StorageItem[]>([]);
+  const [folderId, setFolderId] = useState<string | null>(null);
+  const [crumbs, setCrumbs] = useState<{ id: string | null; name: string }[]>([
+    { id: null, name: "Dateien" },
+  ]);
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
+  const [renameId, setRenameId] = useState<string | null>(null);
+  const [renameName, setRenameName] = useState("");
+  const [error, setError] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const load = useCallback(() => {
+    try { setItems(JSON.parse(localStorage.getItem(STORE_KEY) ?? "[]")); }
+    catch { setItems([]); }
+  }, [STORE_KEY]);
+  useEffect(() => { load(); }, [load]);
+
+  const persist = (next: StorageItem[]) => {
+    setItems(next);
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(next)); setError(""); }
+    catch { setError("Speicherlimit überschritten. Lösche Dateien um Platz freizugeben."); }
+  };
+
+  const totalUsed = items.filter((i) => i.type === "file").reduce((s, i) => s + i.size, 0);
+  const current = items.filter((i) => i.parentId === folderId);
+  const sorted = [
+    ...current.filter((i) => i.type === "folder").sort((a, b) => a.name.localeCompare(b.name)),
+    ...current.filter((i) => i.type === "file").sort((a, b) => a.name.localeCompare(b.name)),
+  ];
+
+  const navigateTo = (id: string | null, name: string) => {
+    if (id === null) {
+      setCrumbs([{ id: null, name: "Dateien" }]);
+      setFolderId(null);
+    } else {
+      const idx = crumbs.findIndex((c) => c.id === id);
+      if (idx >= 0) {
+        setCrumbs(crumbs.slice(0, idx + 1));
+      } else {
+        setCrumbs((prev) => [...prev, { id, name }]);
+      }
+      setFolderId(id);
+    }
+    setCreatingFolder(false);
+    setRenameId(null);
+    setError("");
+  };
+
+  const handleCreateFolder = () => {
+    const name = newFolderName.trim();
+    if (!name) return;
+    if (current.filter((i) => i.type === "folder").some((f) => f.name.toLowerCase() === name.toLowerCase())) {
+      setError(`Ordner "${name}" existiert bereits.`); return;
+    }
+    persist([...items, {
+      id: crypto.randomUUID(), name, type: "folder",
+      parentId: folderId, size: 0, mimeType: "",
+      content: "", createdAt: new Date().toISOString(),
+    }]);
+    setNewFolderName(""); setCreatingFolder(false);
+  };
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files?.length) return;
+    setUploading(true);
+    const newItems: StorageItem[] = [];
+    let used = totalUsed;
+    for (const file of Array.from(files)) {
+      if (used + file.size > MAX_STORAGE_BYTES) { setError("Speicherlimit (25 MB) überschritten."); break; }
+      const content = await new Promise<string>((res) => {
+        const reader = new FileReader();
+        reader.onload = () => res(reader.result as string);
+        reader.readAsDataURL(file);
+      });
+      newItems.push({
+        id: crypto.randomUUID(), name: file.name, type: "file",
+        parentId: folderId, size: file.size,
+        mimeType: file.type || "application/octet-stream",
+        content, createdAt: new Date().toISOString(),
+      });
+      used += file.size;
+    }
+    if (newItems.length) persist([...items, ...newItems]);
+    setUploading(false);
+    e.target.value = "";
+  };
+
+  const handleDownload = (item: StorageItem) => {
+    const a = document.createElement("a");
+    a.href = item.content;
+    a.download = item.name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
+  const handleDelete = (id: string) => {
+    const toDelete = new Set<string>([id]);
+    const queue = [id];
+    while (queue.length) {
+      const curr = queue.shift()!;
+      items.filter((i) => i.parentId === curr).forEach((i) => { toDelete.add(i.id); queue.push(i.id); });
+    }
+    persist(items.filter((i) => !toDelete.has(i.id)));
+  };
+
+  const handleCommitRename = (id: string) => {
+    const name = renameName.trim();
+    if (name) persist(items.map((i) => i.id === id ? { ...i, name } : i));
+    setRenameId(null);
+  };
+
+  const getIcon = (item: StorageItem) => {
+    if (item.type === "folder") return <FolderOpen className="size-4 text-yellow-400 shrink-0" />;
+    if (item.mimeType.startsWith("image/")) return <span className="text-sm shrink-0 leading-none">🖼️</span>;
+    if (item.mimeType.startsWith("audio/")) return <span className="text-sm shrink-0 leading-none">🎵</span>;
+    if (item.mimeType.startsWith("video/")) return <span className="text-sm shrink-0 leading-none">🎬</span>;
+    return <FileText className="size-4 text-muted-foreground shrink-0" />;
+  };
+
+  const pct = totalUsed / MAX_STORAGE_BYTES;
+
+  return (
+    <div className="space-y-4 max-w-3xl">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-sm font-semibold">Dateispeicher</h3>
+          <p className="text-[11px] text-muted-foreground mt-0.5">
+            {formatBytes(totalUsed)} von 25 MB · {items.filter((i) => i.type === "file").length} Dateien
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm" variant="outline" className="h-7 text-[11px] gap-1.5"
+            onClick={() => { setCreatingFolder(true); setNewFolderName(""); }}
+          >
+            <FolderPlus className="size-3" />Ordner
+          </Button>
+          <Button
+            size="sm" className="h-7 text-[11px] gap-1.5"
+            onClick={() => fileInputRef.current?.click()} disabled={uploading}
+          >
+            <Upload className={cn("size-3", uploading && "animate-bounce")} />
+            {uploading ? "Lädt…" : "Hochladen"}
+          </Button>
+          <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleUpload} />
+        </div>
+      </div>
+
+      {/* Storage bar */}
+      <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
+        <div
+          className={cn("h-full rounded-full transition-all", pct > 0.8 ? "bg-red-400" : "bg-blue-400")}
+          style={{ width: `${Math.min(pct * 100, 100)}%` }}
+        />
+      </div>
+
+      {/* Breadcrumb */}
+      <div className="flex items-center gap-1 text-[11px] flex-wrap">
+        {crumbs.map((crumb, i) => (
+          <span key={i} className="flex items-center gap-1">
+            {i > 0 && <ChevronRight className="size-3 text-muted-foreground/50" />}
+            <button
+              onClick={() => navigateTo(crumb.id, crumb.name)}
+              className={cn(
+                "hover:text-foreground transition-colors",
+                i === crumbs.length - 1 ? "text-foreground font-medium" : "text-muted-foreground"
+              )}
+            >
+              {crumb.name}
+            </button>
+          </span>
+        ))}
+      </div>
+
+      {/* Error banner */}
+      {error && (
+        <div className="flex items-center gap-2 text-[11px] text-red-400 rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2">
+          <AlertCircle className="size-3.5 shrink-0" />
+          <span className="flex-1">{error}</span>
+          <button onClick={() => setError("")}><X className="size-3" /></button>
+        </div>
+      )}
+
+      {/* Create folder row */}
+      {creatingFolder && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-primary/40 bg-card">
+          <FolderOpen className="size-4 text-yellow-400 shrink-0" />
+          <input
+            autoFocus
+            value={newFolderName}
+            onChange={(e) => setNewFolderName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleCreateFolder();
+              if (e.key === "Escape") { setCreatingFolder(false); setError(""); }
+            }}
+            placeholder="Ordnername…"
+            className="flex-1 bg-transparent text-[12px] focus:outline-none text-foreground"
+          />
+          <Button size="sm" className="h-6 px-2 text-[10px]" onClick={handleCreateFolder}>Erstellen</Button>
+          <button onClick={() => { setCreatingFolder(false); setError(""); }} className="text-muted-foreground hover:text-foreground">
+            <X className="size-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* File list */}
+      <div className="rounded-xl border border-border bg-card overflow-hidden">
+        {sorted.length === 0 && !creatingFolder ? (
+          <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
+            <HardDrive className="size-8 text-muted-foreground/30" />
+            <p className="text-[12px] text-muted-foreground">Dieser Ordner ist leer.</p>
+            <p className="text-[11px] text-muted-foreground/60">Lade Dateien hoch oder erstelle einen Unterordner.</p>
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-[auto_1fr_auto_auto] text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-4 py-2 border-b border-border bg-muted/40 gap-3">
+              <span className="w-4" />
+              <span>Name</span>
+              <span className="text-right">Größe</span>
+              <span className="w-16" />
+            </div>
+            <div className="divide-y divide-border/40">
+              {sorted.map((item) => (
+                <div
+                  key={item.id}
+                  className="grid grid-cols-[auto_1fr_auto_auto] items-center px-4 py-2.5 hover:bg-accent/20 group transition-colors gap-3"
+                >
+                  {getIcon(item)}
+                  <div className="min-w-0">
+                    {renameId === item.id ? (
+                      <input
+                        autoFocus
+                        value={renameName}
+                        onChange={(e) => setRenameName(e.target.value)}
+                        onBlur={() => handleCommitRename(item.id)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") handleCommitRename(item.id);
+                          if (e.key === "Escape") setRenameId(null);
+                        }}
+                        className="text-[12px] bg-background border border-primary/40 rounded px-1.5 py-0.5 focus:outline-none w-full max-w-xs"
+                      />
+                    ) : (
+                      <button
+                        className={cn(
+                          "text-[12px] text-foreground/80 hover:text-foreground transition-colors text-left truncate max-w-xs block",
+                          item.type === "folder" && "font-medium"
+                        )}
+                        onClick={() => item.type === "folder" && navigateTo(item.id, item.name)}
+                      >
+                        {item.name}
+                      </button>
+                    )}
+                    <p className="text-[10px] text-muted-foreground mt-0.5">
+                      {item.type === "folder"
+                        ? `${items.filter((i) => i.parentId === item.id).length} Elemente`
+                        : new Date(item.createdAt).toLocaleDateString("de-DE")}
+                    </p>
+                  </div>
+                  <span className="text-[11px] text-muted-foreground font-mono text-right">
+                    {item.type === "file" ? formatBytes(item.size) : "—"}
+                  </span>
+                  <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity justify-end">
+                    {item.type === "file" && (
+                      <button onClick={() => handleDownload(item)} title="Herunterladen"
+                        className="p-1 text-muted-foreground hover:text-foreground rounded">
+                        <Download className="size-3.5" />
+                      </button>
+                    )}
+                    <button
+                      onClick={() => { setRenameId(item.id); setRenameName(item.name); }}
+                      title="Umbenennen"
+                      className="p-1 text-muted-foreground hover:text-foreground rounded"
+                    >
+                      <Pencil className="size-3.5" />
+                    </button>
+                    <button onClick={() => handleDelete(item.id)} title="Löschen"
+                      className="p-1 text-muted-foreground hover:text-red-400 rounded">
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function ProjectPage({ params }: { params: Promise<{ botId: string }> }) {
   const { botId } = use(params);
@@ -1204,6 +1590,7 @@ export default function ProjectPage({ params }: { params: Promise<{ botId: strin
 
   const TABS: { key: Tab; label: string; icon: React.ElementType }[] = [
     { key: "overview",  label: "Übersicht",     icon: Activity     },
+    { key: "storage",   label: "Dateien",       icon: HardDrive    },
     { key: "packages",  label: "Pakete",        icon: Package      },
     { key: "env",       label: "Environment",   icon: KeyRound     },
     { key: "database",  label: "Datenbank",     icon: Database     },
@@ -1277,11 +1664,12 @@ export default function ProjectPage({ params }: { params: Promise<{ botId: strin
         {tab === "overview"  && (
           <OverviewTab bot={bot} onStart={handleStart} onStop={handleStop} onRestart={handleRestart} actionState={actionState} />
         )}
+        {tab === "storage"   && <StorageTab botId={botId} />}
         {tab === "packages"  && <PackagesTab botId={botId} />}
         {tab === "env"       && <EnvTab botId={botId} />}
         {tab === "database"  && <DatabaseTab botId={botId} />}
-        {tab === "logs"     && <LogsTab botId={botId} />}
-        {tab === "settings" && <SettingsTab bot={bot} onUpdate={updateBot} onDelete={handleDelete} />}
+        {tab === "logs"      && <LogsTab botId={botId} />}
+        {tab === "settings"  && <SettingsTab bot={bot} onUpdate={updateBot} onDelete={handleDelete} />}
       </div>
     </div>
   );
