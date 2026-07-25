@@ -5,9 +5,10 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft, Play, Square, RotateCcw, Rocket, Code2, Terminal,
-  Database, Settings, Activity, Clock, AlertCircle, CheckCircle2,
+  Database, Settings, Activity, AlertCircle, CheckCircle2,
   ChevronRight, Table2, Search, RefreshCw, Plug, Trash2,
   ChevronLeft, ChevronRight as ChevronRightIcon, X, Eye, EyeOff,
+  KeyRound, Plus, Copy, Check,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,7 +26,7 @@ interface BotProject {
   code: string;
 }
 
-type Tab = "overview" | "database" | "logs" | "settings";
+type Tab = "overview" | "env" | "database" | "logs" | "settings";
 
 // ── Storage helpers ───────────────────────────────────────────────────────────
 const STORAGE_KEY = "cogsforge:bots";
@@ -295,6 +296,157 @@ function SettingsTab({ bot, onUpdate, onDelete }: {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ── Env Tab ───────────────────────────────────────────────────────────────────
+interface EnvVar { key: string; value: string; hidden: boolean; }
+
+function EnvTab({ botId }: { botId: string }) {
+  const STORE = `flowwave:env:${botId}`;
+  const [vars, setVars] = useState<EnvVar[]>([]);
+  const [newKey, setNewKey] = useState("");
+  const [newVal, setNewVal] = useState("");
+  const [newHide, setNewHide] = useState(true);
+  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
+  const [editIdx, setEditIdx] = useState<number | null>(null);
+  const [editVal, setEditVal] = useState("");
+
+  useEffect(() => {
+    try { setVars(JSON.parse(localStorage.getItem(STORE) ?? "[]")); }
+    catch { setVars([]); }
+  }, [STORE]);
+
+  const persist = (next: EnvVar[]) => {
+    setVars(next);
+    localStorage.setItem(STORE, JSON.stringify(next));
+  };
+
+  const handleAdd = () => {
+    const k = newKey.trim().toUpperCase().replace(/[^A-Z0-9_]/g, "_");
+    if (!k || !newVal.trim()) return;
+    if (vars.some((v) => v.key === k)) return;
+    persist([...vars, { key: k, value: newVal.trim(), hidden: newHide }]);
+    setNewKey(""); setNewVal("");
+  };
+
+  const handleDelete = (idx: number) => persist(vars.filter((_, i) => i !== idx));
+
+  const handleCopy = async (idx: number) => {
+    await navigator.clipboard.writeText(vars[idx].value);
+    setCopiedIdx(idx);
+    setTimeout(() => setCopiedIdx(null), 1500);
+  };
+
+  const handleToggleHide = (idx: number) =>
+    persist(vars.map((v, i) => i === idx ? { ...v, hidden: !v.hidden } : v));
+
+  const handleStartEdit = (idx: number) => {
+    setEditIdx(idx);
+    setEditVal(vars[idx].value);
+  };
+
+  const handleCommitEdit = (idx: number) => {
+    if (editVal.trim()) persist(vars.map((v, i) => i === idx ? { ...v, value: editVal.trim() } : v));
+    setEditIdx(null);
+  };
+
+  return (
+    <div className="space-y-5 max-w-2xl">
+      <div>
+        <h3 className="text-sm font-semibold">Environment Variables</h3>
+        <p className="text-[12px] text-muted-foreground mt-0.5">
+          Variablen werden lokal gespeichert. Im Editor per <code className="bg-muted px-1 rounded text-[11px]">os.environ[&apos;KEY&apos;]</code> verwenden.
+        </p>
+      </div>
+
+      {/* Add new */}
+      <div className="rounded-xl border border-border bg-card px-4 py-3 space-y-3">
+        <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Neue Variable</p>
+        <div className="flex gap-2">
+          <Input
+            value={newKey}
+            onChange={(e) => setNewKey(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, "_"))}
+            placeholder="KEY_NAME"
+            className="h-8 text-[12px] font-mono w-44 shrink-0"
+            onKeyDown={(e) => e.key === "Enter" && handleAdd()}
+          />
+          <div className="relative flex-1">
+            <Input
+              type={newHide ? "password" : "text"}
+              value={newVal}
+              onChange={(e) => setNewVal(e.target.value)}
+              placeholder="wert"
+              className="h-8 text-[12px] font-mono pr-8 w-full"
+              onKeyDown={(e) => e.key === "Enter" && handleAdd()}
+            />
+            <button type="button" onClick={() => setNewHide((v) => !v)} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+              {newHide ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+            </button>
+          </div>
+          <Button size="sm" className="h-8 px-3 text-[11px] gap-1.5 shrink-0" onClick={handleAdd} disabled={!newKey.trim() || !newVal.trim()}>
+            <Plus className="size-3" />
+            Hinzufügen
+          </Button>
+        </div>
+      </div>
+
+      {/* List */}
+      {vars.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-border bg-card/40 px-6 py-10 flex flex-col items-center gap-3 text-center">
+          <KeyRound className="size-6 text-muted-foreground/40" />
+          <p className="text-[12px] text-muted-foreground">Noch keine Variablen. Füge deine erste Variable oben hinzu.</p>
+        </div>
+      ) : (
+        <div className="rounded-xl border border-border bg-card overflow-hidden">
+          <div className="grid grid-cols-[1fr_2fr_auto] text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-4 py-2 border-b border-border bg-muted/40">
+            <span>Key</span><span>Value</span><span></span>
+          </div>
+          {vars.map((v, idx) => (
+            <div key={v.key} className="grid grid-cols-[1fr_2fr_auto] items-center px-4 py-2.5 border-b border-border/60 last:border-0 hover:bg-accent/20 gap-3 group">
+              <span className="font-mono text-[12px] text-foreground/80 truncate">{v.key}</span>
+              <div className="flex items-center gap-1.5 min-w-0">
+                {editIdx === idx ? (
+                  <input
+                    autoFocus
+                    value={editVal}
+                    onChange={(e) => setEditVal(e.target.value)}
+                    onBlur={() => handleCommitEdit(idx)}
+                    onKeyDown={(e) => { if (e.key === "Enter") handleCommitEdit(idx); if (e.key === "Escape") setEditIdx(null); }}
+                    className="flex-1 min-w-0 bg-background border border-primary/40 rounded px-2 py-0.5 font-mono text-[12px] focus:outline-none"
+                  />
+                ) : (
+                  <span
+                    className="font-mono text-[12px] text-foreground/60 truncate cursor-pointer hover:text-foreground/80 flex-1 min-w-0"
+                    onClick={() => handleStartEdit(idx)}
+                    title="Klicken zum Bearbeiten"
+                  >
+                    {v.hidden ? "•".repeat(Math.min(v.value.length, 20)) : v.value}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button onClick={() => handleToggleHide(idx)} title={v.hidden ? "Anzeigen" : "Verbergen"} className="p-1 text-muted-foreground hover:text-foreground rounded">
+                  {v.hidden ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
+                </button>
+                <button onClick={() => handleCopy(idx)} title="Kopieren" className="p-1 text-muted-foreground hover:text-foreground rounded">
+                  {copiedIdx === idx ? <Check className="size-3.5 text-emerald-400" /> : <Copy className="size-3.5" />}
+                </button>
+                <button onClick={() => handleDelete(idx)} title="Löschen" className="p-1 text-muted-foreground hover:text-red-400 rounded">
+                  <Trash2 className="size-3.5" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {vars.length > 0 && (
+        <p className="text-[11px] text-muted-foreground">
+          {vars.length} Variable{vars.length !== 1 ? "n" : ""} · Klicke auf einen Wert zum Bearbeiten
+        </p>
+      )}
     </div>
   );
 }
@@ -844,10 +996,11 @@ export default function ProjectPage({ params }: { params: Promise<{ botId: strin
   if (!bot) return null;
 
   const TABS: { key: Tab; label: string; icon: React.ElementType }[] = [
-    { key: "overview", label: "Übersicht", icon: Activity },
-    { key: "database", label: "Datenbank", icon: Database },
-    { key: "logs", label: "Logs", icon: Terminal },
-    { key: "settings", label: "Einstellungen", icon: Settings },
+    { key: "overview",  label: "Übersicht",        icon: Activity  },
+    { key: "env",       label: "Environment",       icon: KeyRound  },
+    { key: "database",  label: "Datenbank",         icon: Database  },
+    { key: "logs",      label: "Logs",              icon: Terminal  },
+    { key: "settings",  label: "Einstellungen",     icon: Settings  },
   ];
 
   return (
@@ -914,16 +1067,11 @@ export default function ProjectPage({ params }: { params: Promise<{ botId: strin
       {/* Content */}
       <div className={cn("max-w-6xl mx-auto px-4 sm:px-6", tab === "database" ? "py-4" : "py-6")}>
         {tab === "overview" && (
-          <OverviewTab
-            bot={bot}
-            onStart={handleStart}
-            onStop={handleStop}
-            onRestart={handleRestart}
-            actionState={actionState}
-          />
+          <OverviewTab bot={bot} onStart={handleStart} onStop={handleStop} onRestart={handleRestart} actionState={actionState} />
         )}
+        {tab === "env"      && <EnvTab botId={botId} />}
         {tab === "database" && <DatabaseTab botId={botId} />}
-        {tab === "logs" && <LogsTab botId={botId} />}
+        {tab === "logs"     && <LogsTab botId={botId} />}
         {tab === "settings" && <SettingsTab bot={bot} onUpdate={updateBot} onDelete={handleDelete} />}
       </div>
     </div>
