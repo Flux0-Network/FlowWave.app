@@ -8,7 +8,7 @@ import {
   Database, Settings, Activity, AlertCircle, CheckCircle2,
   ChevronRight, Table2, Search, RefreshCw, Plug, Trash2,
   ChevronLeft, ChevronRight as ChevronRightIcon, X, Eye, EyeOff,
-  KeyRound, Plus, Copy, Check,
+  KeyRound, Plus, Copy, Check, Package, PackagePlus, ExternalLink,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,7 +26,7 @@ interface BotProject {
   code: string;
 }
 
-type Tab = "overview" | "env" | "database" | "logs" | "settings";
+type Tab = "overview" | "packages" | "env" | "database" | "logs" | "settings";
 
 // ── Storage helpers ───────────────────────────────────────────────────────────
 const STORAGE_KEY = "cogsforge:bots";
@@ -295,6 +295,213 @@ function SettingsTab({ bot, onUpdate, onDelete }: {
             <Button size="sm" variant="ghost" className="h-7 text-[11px]" onClick={() => setConfirm(false)}>Abbrechen</Button>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ── Packages Tab ─────────────────────────────────────────────────────────────
+interface PkgEntry { name: string; version: string; }
+
+const POPULAR_PACKAGES = [
+  { name: "py-cord",         label: "Pycord",         desc: "Discord API wrapper (fork)" },
+  { name: "discord.py",      label: "discord.py",     desc: "Original Discord wrapper" },
+  { name: "aiohttp",         label: "aiohttp",        desc: "Async HTTP client" },
+  { name: "aiosqlite",       label: "aiosqlite",      desc: "Async SQLite" },
+  { name: "python-dotenv",   label: "python-dotenv",  desc: ".env Dateien laden" },
+  { name: "requests",        label: "requests",       desc: "HTTP requests" },
+  { name: "Pillow",          label: "Pillow",         desc: "Bildverarbeitung" },
+  { name: "motor",           label: "motor",          desc: "Async MongoDB" },
+];
+
+function parseRequirements(content: string): PkgEntry[] {
+  return content
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith("#"))
+    .map((l) => {
+      const match = l.match(/^([A-Za-z0-9_\-\.]+)(?:[=~<>!]+(.+))?$/);
+      if (!match) return null;
+      return { name: match[1], version: match[2]?.trim() ?? "" };
+    })
+    .filter(Boolean) as PkgEntry[];
+}
+
+function buildRequirements(pkgs: PkgEntry[]): string {
+  return pkgs.map((p) => p.version ? `${p.name}==${p.version.replace(/^==/, "")}` : p.name).join("\n") + "\n";
+}
+
+function PackagesTab({ botId }: { botId: string }) {
+  const [pkgs, setPkgs] = useState<PkgEntry[]>([]);
+  const [newName, setNewName] = useState("");
+  const [newVersion, setNewVersion] = useState("");
+  const [search, setSearch] = useState("");
+  const [error, setError] = useState("");
+
+  const getFiles = useCallback((): Array<{ name: string; content: string }> => {
+    try {
+      const bots = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]");
+      const bot = bots.find((b: BotProject) => b.id === botId);
+      if (!bot?.code) return [];
+      const parsed = JSON.parse(bot.code);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch { return []; }
+  }, [botId]);
+
+  const saveFiles = useCallback((files: Array<{ name: string; content: string }>) => {
+    const bots = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]");
+    const updated = bots.map((b: BotProject) =>
+      b.id === botId ? { ...b, code: JSON.stringify(files) } : b
+    );
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+  }, [botId]);
+
+  useEffect(() => {
+    const files = getFiles();
+    const req = files.find((f) => f.name === "requirements.txt");
+    setPkgs(req ? parseRequirements(req.content) : []);
+  }, [getFiles]);
+
+  const persistPkgs = (next: PkgEntry[]) => {
+    setPkgs(next);
+    const files = getFiles();
+    const reqContent = buildRequirements(next);
+    const hasReq = files.some((f) => f.name === "requirements.txt");
+    const updated = hasReq
+      ? files.map((f) => f.name === "requirements.txt" ? { ...f, content: reqContent } : f)
+      : [...files, { name: "requirements.txt", content: reqContent }];
+    saveFiles(updated);
+  };
+
+  const handleAdd = (name = newName, version = newVersion) => {
+    const n = name.trim();
+    if (!n) { setError("Name erforderlich."); return; }
+    if (pkgs.some((p) => p.name.toLowerCase() === n.toLowerCase())) {
+      setError(`"${n}" ist bereits vorhanden.`); return;
+    }
+    setError("");
+    persistPkgs([...pkgs, { name: n, version: version.trim() }]);
+    setNewName(""); setNewVersion("");
+  };
+
+  const handleDelete = (idx: number) => persistPkgs(pkgs.filter((_, i) => i !== idx));
+
+  const handleVersionChange = (idx: number, v: string) =>
+    persistPkgs(pkgs.map((p, i) => i === idx ? { ...p, version: v } : p));
+
+  const filteredPopular = POPULAR_PACKAGES.filter(
+    (p) => !pkgs.some((e) => e.name.toLowerCase() === p.name.toLowerCase()) &&
+      p.name.toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <div className="space-y-6 max-w-2xl">
+      <div>
+        <h3 className="text-sm font-semibold">Pakete</h3>
+        <p className="text-[12px] text-muted-foreground mt-0.5">
+          Verwaltet deine <code className="bg-muted px-1 rounded text-[11px]">requirements.txt</code> — wird beim Deploy automatisch installiert.
+        </p>
+      </div>
+
+      {/* Add form */}
+      <div className="rounded-xl border border-border bg-card px-4 py-3 space-y-3">
+        <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Paket hinzufügen</p>
+        <div className="flex gap-2">
+          <Input
+            value={newName}
+            onChange={(e) => { setNewName(e.target.value); setError(""); }}
+            placeholder="z.B. py-cord"
+            className="h-8 text-[12px] font-mono flex-1"
+            onKeyDown={(e) => e.key === "Enter" && handleAdd()}
+          />
+          <Input
+            value={newVersion}
+            onChange={(e) => setNewVersion(e.target.value)}
+            placeholder="Version (opt.) z.B. 2.6.1"
+            className="h-8 text-[12px] font-mono w-44 shrink-0"
+            onKeyDown={(e) => e.key === "Enter" && handleAdd()}
+          />
+          <Button size="sm" className="h-8 px-3 text-[11px] gap-1.5 shrink-0" onClick={() => handleAdd()}>
+            <PackagePlus className="size-3" />
+            Hinzufügen
+          </Button>
+        </div>
+        {error && <p className="text-[11px] text-red-400 flex items-center gap-1"><AlertCircle className="size-3" />{error}</p>}
+        <p className="text-[10px] text-muted-foreground">
+          Ohne Version → immer aktuellste. Mit Version → <code className="bg-muted px-0.5 rounded">paket==1.2.3</code>
+        </p>
+      </div>
+
+      {/* Installed packages */}
+      {pkgs.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+            Installiert ({pkgs.length})
+          </p>
+          <div className="rounded-xl border border-border bg-card overflow-hidden">
+            <div className="grid grid-cols-[1fr_1fr_auto] text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-4 py-2 border-b border-border bg-muted/40">
+              <span>Paket</span><span>Version</span><span></span>
+            </div>
+            {pkgs.map((pkg, idx) => (
+              <div key={idx} className="grid grid-cols-[1fr_1fr_auto] items-center px-4 py-2.5 border-b border-border/60 last:border-0 hover:bg-accent/20 gap-3 group">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Package className="size-3.5 text-muted-foreground shrink-0" />
+                  <span className="font-mono text-[12px] text-foreground/80 truncate">{pkg.name}</span>
+                </div>
+                <input
+                  value={pkg.version}
+                  onChange={(e) => handleVersionChange(idx, e.target.value)}
+                  placeholder="neueste"
+                  className="font-mono text-[12px] bg-transparent border border-transparent hover:border-border focus:border-primary/40 rounded px-1.5 py-0.5 focus:outline-none text-foreground/60 w-full"
+                />
+                <button
+                  onClick={() => handleDelete(idx)}
+                  className="opacity-0 group-hover:opacity-100 p-1 text-muted-foreground hover:text-red-400 rounded transition-opacity"
+                  title="Entfernen"
+                >
+                  <Trash2 className="size-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Popular suggestions */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Beliebte Pakete</p>
+          <div className="relative">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3 text-muted-foreground" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Suchen…"
+              className="pl-6 pr-2 py-1 text-[11px] bg-muted border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary/40 w-36"
+            />
+          </div>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {filteredPopular.map((p) => (
+            <button
+              key={p.name}
+              onClick={() => handleAdd(p.name, "")}
+              className="flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg border border-border bg-card hover:bg-accent/40 hover:border-primary/30 transition-colors text-left group"
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <Package className="size-3.5 text-muted-foreground shrink-0" />
+                <div className="min-w-0">
+                  <p className="text-[12px] font-mono font-medium text-foreground/80 truncate">{p.name}</p>
+                  <p className="text-[10px] text-muted-foreground truncate">{p.desc}</p>
+                </div>
+              </div>
+              <Plus className="size-3.5 text-muted-foreground group-hover:text-primary shrink-0 transition-colors" />
+            </button>
+          ))}
+          {filteredPopular.length === 0 && (
+            <p className="text-[12px] text-muted-foreground col-span-2 py-2">Alle beliebten Pakete sind bereits installiert.</p>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -996,11 +1203,12 @@ export default function ProjectPage({ params }: { params: Promise<{ botId: strin
   if (!bot) return null;
 
   const TABS: { key: Tab; label: string; icon: React.ElementType }[] = [
-    { key: "overview",  label: "Übersicht",        icon: Activity  },
-    { key: "env",       label: "Environment",       icon: KeyRound  },
-    { key: "database",  label: "Datenbank",         icon: Database  },
-    { key: "logs",      label: "Logs",              icon: Terminal  },
-    { key: "settings",  label: "Einstellungen",     icon: Settings  },
+    { key: "overview",  label: "Übersicht",     icon: Activity     },
+    { key: "packages",  label: "Pakete",        icon: Package      },
+    { key: "env",       label: "Environment",   icon: KeyRound     },
+    { key: "database",  label: "Datenbank",     icon: Database     },
+    { key: "logs",      label: "Logs",          icon: Terminal     },
+    { key: "settings",  label: "Einstellungen", icon: Settings     },
   ];
 
   return (
@@ -1066,11 +1274,12 @@ export default function ProjectPage({ params }: { params: Promise<{ botId: strin
 
       {/* Content */}
       <div className={cn("max-w-6xl mx-auto px-4 sm:px-6", tab === "database" ? "py-4" : "py-6")}>
-        {tab === "overview" && (
+        {tab === "overview"  && (
           <OverviewTab bot={bot} onStart={handleStart} onStop={handleStop} onRestart={handleRestart} actionState={actionState} />
         )}
-        {tab === "env"      && <EnvTab botId={botId} />}
-        {tab === "database" && <DatabaseTab botId={botId} />}
+        {tab === "packages"  && <PackagesTab botId={botId} />}
+        {tab === "env"       && <EnvTab botId={botId} />}
+        {tab === "database"  && <DatabaseTab botId={botId} />}
         {tab === "logs"     && <LogsTab botId={botId} />}
         {tab === "settings" && <SettingsTab bot={bot} onUpdate={updateBot} onDelete={handleDelete} />}
       </div>
