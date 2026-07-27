@@ -8,6 +8,7 @@ import {
 import { buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { LandingAuthButton } from "@/components/layout/landing-auth-button";
 
 function LandingHeader() {
   return (
@@ -28,10 +29,7 @@ function LandingHeader() {
           </Link>
         </nav>
         <div className="ml-auto flex items-center gap-2">
-          <Link href="/projects" className={cn(buttonVariants({ size: "sm" }), "gap-1.5")}>
-            Loslegen
-            <ArrowRight className="size-3.5" />
-          </Link>
+          <LandingAuthButton />
         </div>
       </div>
     </header>
