@@ -5,8 +5,14 @@ import { useRouter } from "next/navigation";
 import {
   ChevronRight, ChevronDown, FolderOpen, FileCode, ArrowLeft, Rocket, Save,
   Eye, EyeOff, RotateCcw, AlertCircle, CheckCircle2, Plus, Trash2, Pencil,
-  X, FolderPlus, Bot, Send, Loader2, Sparkles,
+  X, FolderPlus, Bot, Send, Loader2, Sparkles, Blocks, Cog,
 } from "lucide-react";
+import dynamic from "next/dynamic";
+
+const BuilderPage = dynamic(
+  () => import("@/app/(app)/builder/page"),
+  { ssr: false, loading: () => <div className="flex-1 flex items-center justify-center text-zinc-500"><Loader2 className="size-5 animate-spin" /></div> }
+);
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -375,6 +381,7 @@ export default function EditorPage({ params }: { params: Promise<{ botId: string
   const [renameName, setRenameName] = useState("");
   const [creatingRootFolder, setCreatingRootFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
+  const [editorMode, setEditorMode] = useState<"code" | "builder" | "generator">("code");
   const [showAi, setShowAi] = useState(false);
   const [token, setToken] = useState("");
   const [showToken, setShowToken] = useState(false);
@@ -686,9 +693,34 @@ export default function EditorPage({ params }: { params: Promise<{ botId: string
         </div>
       </div>
 
+      {/* Mode tabs */}
+      <div className="flex items-center gap-0.5 px-3 py-1.5 border-b border-white/8 bg-black/20 shrink-0">
+        {([
+          { key: "code", label: "Code Editor", Icon: null },
+          { key: "builder", label: "Builder", Icon: Blocks },
+          { key: "generator", label: "Generator", Icon: Cog },
+        ] as const).map(({ key, label, Icon }) => (
+          <button
+            key={key}
+            onClick={() => setEditorMode(key)}
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-1 rounded text-[11px] font-medium transition-colors",
+              editorMode === key
+                ? "bg-white/10 text-zinc-200"
+                : "text-zinc-500 hover:text-zinc-300 hover:bg-white/5"
+            )}
+          >
+            {Icon && <Icon className="size-3" />}
+            {label}
+          </button>
+        ))}
+      </div>
+
       <div className="flex flex-1 min-h-0">
-        {/* Sidebar */}
-        <div className="w-48 shrink-0 border-r border-white/8 bg-black/20 flex flex-col">
+        {editorMode === "builder" && <BuilderPage embedded initialMode="components" />}
+        {editorMode === "generator" && <BuilderPage embedded initialMode="cog" />}
+        {/* Sidebar + Editor + AI (code mode only) */}
+        {editorMode === "code" && <><div className="w-48 shrink-0 border-r border-white/8 bg-black/20 flex flex-col">
           {/* Explorer header */}
           <div className="flex items-center justify-between px-3 py-2">
             <p className="text-[9px] text-zinc-600 font-semibold uppercase tracking-widest select-none">
@@ -801,6 +833,7 @@ export default function EditorPage({ params }: { params: Promise<{ botId: string
 
         {/* AI Panel */}
         {showAi && <AiPanel fileName={activeFile?.name ?? ""} fileContent={code} />}
+        </>}
       </div>
 
       {/* Bottom bar */}

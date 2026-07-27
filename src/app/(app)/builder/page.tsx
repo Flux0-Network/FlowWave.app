@@ -74,8 +74,8 @@ type MobileCompPanel = "palette" | "preview" | "properties";
 type MobileCogPanel  = "config" | "code";
 
 // ── Page ────────────────────────────────────────────────────────────────────────────────
-export default function BuilderPage() {
-  const [mode, setMode] = useState<Mode>("components");
+export default function BuilderPage({ initialMode = "components", embedded = false }: { initialMode?: Mode; embedded?: boolean }) {
+  const [mode, setMode] = useState<Mode>(initialMode);
 
   const [mobileCompPanel, setMobileCompPanel] = useState<MobileCompPanel>("palette");
   const [mobileCogPanel,  setMobileCogPanel]  = useState<MobileCogPanel>("config");
@@ -214,7 +214,7 @@ export default function BuilderPage() {
   }
 
   return (
-    <div className="flex flex-col h-[calc(100vh-3.25rem)]">
+    <div className={embedded ? "flex flex-col h-full" : "flex flex-col h-[calc(100vh-3.25rem)]"}>
 
       {/* ── Unified toolbar ───────────────────────────────────────────────────── */}
       <div className="flex items-center gap-1.5 sm:gap-2 border-b border-border/70 bg-card/50 px-2 sm:px-3 py-1.5 shrink-0">

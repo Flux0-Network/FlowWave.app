@@ -18,15 +18,9 @@ function LandingHeader() {
           <Image src="/logo.png" alt="FlowWave" width={120} height={40} className="h-8 w-auto object-contain" priority />
         </Link>
         <nav className="hidden md:flex items-center gap-0.5 flex-1">
-          <Link href="/marketplace" className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "text-muted-foreground hover:text-foreground")}>
-            Marketplace
-          </Link>
-          <Link href="/builder" className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "text-muted-foreground hover:text-foreground")}>
-            Builder
-          </Link>
-          <Link href="/generator" className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "text-muted-foreground hover:text-foreground")}>
-            Generator
-          </Link>
+          <a href="#features" className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "text-muted-foreground hover:text-foreground")}>
+            Features
+          </a>
         </nav>
         <div className="ml-auto flex items-center gap-2">
           <LandingAuthButton />
@@ -308,9 +302,6 @@ export default function LandingPage() {
                   Jetzt starten
                   <ArrowRight className="size-4" />
                 </Link>
-                <Link href="/builder" className={cn(buttonVariants({ size: "lg", variant: "outline" }), "gap-2")}>
-                  Builder ausprobieren
-                </Link>
               </div>
             </div>
 
@@ -344,7 +335,7 @@ export default function LandingPage() {
         </section>
 
         {/* Features */}
-        <section className="container mx-auto px-6 py-16">
+        <section id="features" className="container mx-auto px-6 py-16">
           <h2 className="text-2xl font-bold text-center mb-3 tracking-tight">Alles was du brauchst</h2>
           <p className="text-muted-foreground text-sm text-center mb-10 max-w-md mx-auto">
             Von Code bis Deploy — FlowWave ist die einzige Plattform, die du brauchst.
@@ -407,6 +398,7 @@ export default function LandingPage() {
             <Image src="/logo.png" alt="FlowWave" width={80} height={24} className="h-5 w-auto object-contain" />
           </div>
           <p>Gebaut für die Discord-Bot-Community.</p>
+          <p className="text-xs text-muted-foreground/50">Powered by Flux Network</p>
         </div>
       </footer>
     </div>
