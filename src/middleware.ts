@@ -1,8 +1,6 @@
 import { auth } from "@/lib/auth";
 import { NextResponse } from "next/server";
 
-const PROTECTED = ["/projects", "/builder", "/generator", "/marketplace"];
-
 export default auth((req) => {
   const { pathname } = req.nextUrl;
 
@@ -10,7 +8,7 @@ export default auth((req) => {
     return NextResponse.redirect(new URL("/projects", req.url));
   }
 
-  if (PROTECTED.some((p) => pathname.startsWith(p)) && !req.auth) {
+  if (!req.auth) {
     const url = new URL("/login", req.url);
     url.searchParams.set("callbackUrl", pathname);
     return NextResponse.redirect(url);
@@ -18,5 +16,11 @@ export default auth((req) => {
 });
 
 export const config = {
-  matcher: ["/((?!api|_next/static|_next/image|favicon\\.ico).*)"],
+  matcher: [
+    "/projects/:path*",
+    "/builder/:path*",
+    "/generator/:path*",
+    "/marketplace/:path*",
+    "/login",
+  ],
 };
