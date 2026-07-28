@@ -3,9 +3,10 @@
 import React, { use, useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
-  ChevronRight, ChevronDown, FolderOpen, FileCode, ArrowLeft, Rocket, Save,
+  ChevronRight, ChevronDown, ChevronUp, FolderOpen, FileCode, ArrowLeft, Rocket, Save,
   Eye, EyeOff, RotateCcw, AlertCircle, CheckCircle2, Plus, Trash2, Pencil,
   X, FolderPlus, Bot, Send, Loader2, Sparkles, Blocks, Cog,
+  Search, History, Clock,
 } from "lucide-react";
 import dynamic from "next/dynamic";
 
@@ -130,9 +131,16 @@ interface ChatMessage {
   content: string;
 }
 
+interface DeployRecord {
+  ts: number;
+  ok: boolean;
+  msg: string;
+}
+
 // ── Storage ──────────────────────────────────────────────────────────────────
 const STORAGE_KEY = "cogsforge:bots";
 const foldersKey = (id: string) => `flowwave:folders:${id}`;
+const deploysKey = (id: string) => `flowwave:deploys:${id}`;
 
 function loadBots(): BotProject[] {
   if (typeof window === "undefined") return [];
@@ -232,6 +240,30 @@ function Highlighted({ tokens }: { tokens: Token[] }) {
       )}
     </>
   );
+}
+
+// ── Search highlights overlay ─────────────────────────────────────────────────
+function SearchHighlights({ text, query, activeIdx }: { text: string; query: string; activeIdx: number }) {
+  if (!query) return null;
+  const qLower = query.toLowerCase();
+  const textLower = text.toLowerCase();
+  const parts: React.ReactNode[] = [];
+  let pos = 0;
+  let matchCount = 0;
+  let i = textLower.indexOf(qLower);
+  while (i !== -1) {
+    if (i > pos) parts.push(<span key={`t${pos}`} style={{ color: "transparent" }}>{text.slice(pos, i)}</span>);
+    parts.push(
+      <span key={`m${i}`} style={{ color: "transparent", background: matchCount === activeIdx ? "rgba(251,191,36,0.45)" : "rgba(251,191,36,0.2)", borderRadius: "2px" }}>
+        {text.slice(i, i + query.length)}
+      </span>
+    );
+    pos = i + query.length;
+    matchCount++;
+    i = textLower.indexOf(qLower, pos);
+  }
+  if (pos < text.length) parts.push(<span key={`t${pos}`} style={{ color: "transparent" }}>{text.slice(pos)}</span>);
+  return <>{parts}</>;
 }
 
 // ── AI Assistant panel ────────────────────────────────────────────────────────
@@ -389,12 +421,29 @@ export default function EditorPage({ params }: { params: Promise<{ botId: string
   const [deploying, setDeploying] = useState(false);
   const [deployError, setDeployError] = useState("");
   const [deploySuccess, setDeploySuccess] = useState(false);
+  const [deployHistory, setDeployHistory] = useState<DeployRecord[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const [showFind, setShowFind] = useState(false);
+  const [findIdx, setFindIdx] = useState(0);
+  const [cursorLine, setCursorLine] = useState(1);
+  const [cursorCol, setCursorCol] = useState(1);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const findRef = useRef<HTMLInputElement>(null);
 
   const activeFile = files[activeIdx] ?? files[0];
   const code = activeFile?.content ?? "";
   const tokens = useMemo(() => tokenize(code), [code]);
   const tree = useMemo(() => buildTree(files, extraFolders), [files, extraFolders]);
+  const findMatches = useMemo<number[]>(() => {
+    if (!findQuery) return [];
+    const q = findQuery.toLowerCase();
+    const src = code.toLowerCase();
+    const results: number[] = [];
+    let i = src.indexOf(q);
+    while (i !== -1) { results.push(i); i = src.indexOf(q, i + 1); }
+    return results;
+  }, [code, findQuery]);
 
   useEffect(() => {
     const found = loadBots().find((b) => b.id === botId);
@@ -412,6 +461,8 @@ export default function EditorPage({ params }: { params: Promise<{ botId: string
       });
       saved.forEach((fp) => auto.add(fp));
       setOpenFolders(auto);
+      const hist: DeployRecord[] = JSON.parse(localStorage.getItem(deploysKey(botId)) ?? "[]");
+      setDeployHistory(hist);
     } catch {}
   }, [botId, router]);
 
@@ -429,6 +480,15 @@ export default function EditorPage({ params }: { params: Promise<{ botId: string
     localStorage.setItem(foldersKey(botId), JSON.stringify(extraFolders));
     setSaved(true);
   }, [bot, files, botId, extraFolders]);
+
+  const addDeployRecord = useCallback((ok: boolean, msg: string) => {
+    const record: DeployRecord = { ts: Date.now(), ok, msg };
+    setDeployHistory((prev) => {
+      const next = [record, ...prev].slice(0, 10);
+      localStorage.setItem(deploysKey(botId), JSON.stringify(next));
+      return next;
+    });
+  }, [botId]);
 
   const handleDeploy = async () => {
     if (!bot || !token.trim()) { setDeployError("Token erforderlich."); return; }
@@ -450,13 +510,32 @@ export default function EditorPage({ params }: { params: Promise<{ botId: string
       localStorage.setItem(STORAGE_KEY, JSON.stringify(bots));
       setBot((prev) => prev ? { ...prev, status: "running" } : prev);
       setDeploySuccess(true);
+      addDeployRecord(true, "Bot erfolgreich deployed");
       setToken("");
     } catch (e) {
-      setDeployError(e instanceof Error ? e.message : "Deploy fehlgeschlagen.");
+      const msg = e instanceof Error ? e.message : "Deploy fehlgeschlagen.";
+      setDeployError(msg);
+      addDeployRecord(false, msg);
     } finally {
       setDeploying(false);
     }
   };
+
+  const handleCursorChange = (ta: HTMLTextAreaElement) => {
+    const before = ta.value.slice(0, ta.selectionStart);
+    const line = before.split("\n").length;
+    const col = before.length - before.lastIndexOf("\n");
+    setCursorLine(line);
+    setCursorCol(col);
+  };
+
+  const gotoMatch = useCallback((idx: number) => {
+    if (!findMatches.length || !textareaRef.current) return;
+    const i = ((idx % findMatches.length) + findMatches.length) % findMatches.length;
+    setFindIdx(i);
+    textareaRef.current.focus();
+    textareaRef.current.setSelectionRange(findMatches[i], findMatches[i] + findQuery.length);
+  }, [findMatches, findQuery]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Tab") {
@@ -471,6 +550,11 @@ export default function EditorPage({ params }: { params: Promise<{ botId: string
     if ((e.metaKey || e.ctrlKey) && e.key === "s") {
       e.preventDefault();
       handleSave();
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key === "f") {
+      e.preventDefault();
+      setShowFind(true);
+      setTimeout(() => findRef.current?.focus(), 50);
     }
   };
 
@@ -575,7 +659,7 @@ export default function EditorPage({ params }: { params: Promise<{ botId: string
           <React.Fragment key={node.path}>
             <div
               style={{ paddingLeft: `${indent}px` }}
-              className="flex items-center gap-1 py-[4px] pr-1 text-[12px] text-zinc-500 hover:text-zinc-300 hover:bg-white/5 cursor-default select-none"
+              className="flex items-center gap-1 py-[4px] pr-1 text-[12px] text-zinc-500 hover:text-zinc-300 hover:bg-white/5 cursor-pointer select-none"
               onClick={() => setOpenFolders((prev) => {
                 const next = new Set(prev);
                 if (next.has(node.path)) next.delete(node.path); else next.add(node.path);
@@ -621,7 +705,7 @@ export default function EditorPage({ params }: { params: Promise<{ botId: string
           key={node.path}
           style={{ paddingLeft: `${indent + 16}px` }}
           className={cn(
-            "flex items-center gap-1 py-[4px] pr-1 text-[12px] select-none cursor-default",
+            "flex items-center gap-1 py-[4px] pr-1 text-[12px] select-none cursor-pointer",
             isActive ? "bg-white/10 text-zinc-100" : "text-zinc-500 hover:text-zinc-300 hover:bg-white/5"
           )}
           onClick={() => { if (!isRen && node.fileIdx !== undefined) setActiveIdx(node.fileIdx); }}
@@ -800,6 +884,32 @@ export default function EditorPage({ params }: { params: Promise<{ botId: string
             ))}
           </div>
 
+          {/* Find bar */}
+          {showFind && (
+            <div className="flex items-center gap-2 px-3 py-1.5 border-b border-white/8 bg-black/30 shrink-0">
+              <Search className="size-3 text-zinc-500 shrink-0" />
+              <input
+                ref={findRef}
+                value={findQuery}
+                onChange={(e) => { setFindQuery(e.target.value); setFindIdx(0); }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { e.preventDefault(); gotoMatch(e.shiftKey ? findIdx - 1 : findIdx + 1); }
+                  if (e.key === "Escape") { setShowFind(false); setFindQuery(""); textareaRef.current?.focus(); }
+                }}
+                placeholder="Suchen… (Enter = weiter, Esc = schließen)"
+                className="flex-1 bg-transparent text-[11px] text-zinc-300 placeholder:text-zinc-600 focus:outline-none font-mono"
+              />
+              {findQuery && (
+                <span className="text-[10px] text-zinc-500 shrink-0">
+                  {findMatches.length === 0 ? "Keine Treffer" : `${Math.min(findIdx + 1, findMatches.length)} / ${findMatches.length}`}
+                </span>
+              )}
+              <button onClick={() => { gotoMatch(findIdx - 1); }} disabled={!findMatches.length} className="text-zinc-500 hover:text-zinc-300 disabled:opacity-30 p-0.5"><ChevronUp className="size-3" /></button>
+              <button onClick={() => { gotoMatch(findIdx + 1); }} disabled={!findMatches.length} className="text-zinc-500 hover:text-zinc-300 disabled:opacity-30 p-0.5"><ChevronDown className="size-3" /></button>
+              <button onClick={() => { setShowFind(false); setFindQuery(""); textareaRef.current?.focus(); }} className="text-zinc-500 hover:text-zinc-300 p-0.5"><X className="size-3" /></button>
+            </div>
+          )}
+
           {/* Syntax-highlighted editor */}
           <div className="flex-1 overflow-auto min-h-0">
             <div className="relative min-h-full">
@@ -816,11 +926,22 @@ export default function EditorPage({ params }: { params: Promise<{ botId: string
               >
                 <code><Highlighted tokens={tokens} /></code>
               </pre>
+              {showFind && findQuery && (
+                <pre
+                  aria-hidden
+                  className="absolute inset-0 p-4 m-0 font-mono text-[13px] leading-[1.75] whitespace-pre pointer-events-none select-none"
+                >
+                  <SearchHighlights text={code} query={findQuery} activeIdx={findIdx} />
+                </pre>
+              )}
               <textarea
                 ref={textareaRef}
                 value={code}
                 onChange={(e) => setCode(e.target.value)}
                 onKeyDown={handleKeyDown}
+                onSelect={(e) => handleCursorChange(e.currentTarget)}
+                onClick={(e) => handleCursorChange(e.currentTarget)}
+                onKeyUp={(e) => handleCursorChange(e.currentTarget)}
                 className="absolute inset-0 w-full h-full bg-transparent font-mono text-[13px] leading-[1.75] p-4 resize-none focus:outline-none"
                 style={{ color: "transparent", caretColor: "#c8cdd4" }}
                 spellCheck={false}
@@ -836,8 +957,29 @@ export default function EditorPage({ params }: { params: Promise<{ botId: string
         </>}
       </div>
 
+      {/* Deploy history dropdown */}
+      {showHistory && deployHistory.length > 0 && (
+        <div className="shrink-0 border-t border-white/8 bg-black/50 px-4 py-2 max-h-40 overflow-y-auto">
+          <p className="text-[9px] text-zinc-600 font-semibold uppercase tracking-widest mb-1.5">Deploy-Verlauf</p>
+          <div className="space-y-1">
+            {deployHistory.map((r, i) => (
+              <div key={i} className="flex items-center gap-2 text-[11px]">
+                {r.ok
+                  ? <CheckCircle2 className="size-3 text-emerald-400 shrink-0" />
+                  : <AlertCircle className="size-3 text-red-400 shrink-0" />}
+                <span className={r.ok ? "text-emerald-400" : "text-red-400"}>{r.msg}</span>
+                <span className="ml-auto text-zinc-600 font-mono text-[10px] flex items-center gap-1 shrink-0">
+                  <Clock className="size-2.5" />
+                  {new Date(r.ts).toLocaleString("de-DE", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Bottom bar */}
-      <div className="shrink-0 border-t border-white/8 bg-black/40 px-4 py-2.5 flex items-center gap-3">
+      <div className="shrink-0 border-t border-white/8 bg-black/40 px-4 py-2 flex items-center gap-3">
         <div className="flex-1 relative max-w-sm">
           <Input
             type={showToken ? "text" : "password"}
@@ -864,15 +1006,30 @@ export default function EditorPage({ params }: { params: Promise<{ botId: string
         {deploySuccess && (
           <div className="flex items-center gap-1.5 text-[11px] text-emerald-400">
             <CheckCircle2 className="size-3 shrink-0" />
-            Bot läuft!
+            Bot deployed!
           </div>
         )}
 
         <div className="ml-auto flex items-center gap-2">
+          {editorMode === "code" && (
+            <span className="text-[10px] text-zinc-600 font-mono hidden sm:block">
+              Zeile {cursorLine}, Sp. {cursorCol}
+            </span>
+          )}
           <span className={cn("size-2 rounded-full", bot.status === "running" ? "bg-emerald-400" : "bg-zinc-600")} />
           <span className="text-[11px] text-zinc-500">
             {bot.status === "running" ? "Online" : "Offline"}
           </span>
+          {deployHistory.length > 0 && (
+            <button
+              onClick={() => setShowHistory((v) => !v)}
+              title="Deploy-Verlauf"
+              className={cn("flex items-center gap-1 h-7 px-2 text-[11px] rounded transition-colors", showHistory ? "text-zinc-300 bg-white/10" : "text-zinc-500 hover:text-zinc-300 hover:bg-white/5")}
+            >
+              <History className="size-3" />
+              {deployHistory.filter(r => r.ok).length}/{deployHistory.length}
+            </button>
+          )}
           <Button size="sm" className="h-7 gap-1.5 text-[11px]" onClick={handleDeploy} disabled={deploying}>
             {deploying ? (
               <><RotateCcw className="size-3 animate-spin" />Deploying…</>
