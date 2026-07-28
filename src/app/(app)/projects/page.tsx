@@ -43,19 +43,10 @@ interface BotProject {
   code: string;
 }
 
-const STORAGE_KEY = "cogsforge:bots";
-
-function loadBots(): BotProject[] {
-  if (typeof window === "undefined") return [];
-  try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]");
-  } catch {
-    return [];
-  }
-}
-
-function saveBots(bots: BotProject[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(bots));
+async function apiFetch(url: string, opts?: RequestInit) {
+  const res = await fetch(url, opts);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
 
 function formatDate(iso: string) {
@@ -76,25 +67,6 @@ function mapDockerStatus(s: string): BotStatus {
   return "stopped";
 }
 
-const DEFAULT_BOT_CODE = `import discord
-from discord.ext import commands
-import os
-
-intents = discord.Intents.default()
-intents.message_content = True
-
-bot = commands.Bot(command_prefix='!', intents=intents)
-
-@bot.event
-async def on_ready():
-    print(f'Eingeloggt als {bot.user}')
-
-@bot.command()
-async def ping(ctx):
-    await ctx.send('Pong!')
-
-bot.run(os.environ['DISCORD_TOKEN'])
-`;
 
 const STATUS_DOT: Record<BotStatus, string> = {
   running: "bg-emerald-400",
@@ -421,27 +393,37 @@ function NewBotDialog({ onAdd }: { onAdd: (name: string, clientId: string) => vo
 
 export default function ProjectsPage() {
   const [bots, _setBots] = useState<BotProject[]>([]);
+  const [loading, setLoading] = useState(true);
   const [actionStates, setActionStates] = useState<Record<string, string>>({});
   const botsRef = useRef<BotProject[]>([]);
 
-  const update = useCallback((next: BotProject[]) => {
+  const setBotsLocal = useCallback((next: BotProject[]) => {
     botsRef.current = next;
     _setBots(next);
-    saveBots(next);
   }, []);
 
   const setAction = (id: string, action: string) =>
     setActionStates((prev) => ({ ...prev, [id]: action }));
 
+  // load from Supabase
   useEffect(() => {
-    const loaded = loadBots().map((b) => ({
-      ...b,
-      code: b.code ?? DEFAULT_BOT_CODE,
-    }));
-    botsRef.current = loaded;
-    _setBots(loaded);
-  }, []);
+    apiFetch("/api/db/projects")
+      .then((rows: Array<{ id: string; name: string; client_id: string; status: string; created_at: string }>) => {
+        const mapped: BotProject[] = rows.map((r) => ({
+          id: r.id,
+          name: r.name,
+          clientId: r.client_id,
+          status: r.status as BotStatus,
+          createdAt: r.created_at,
+          code: "",
+        }));
+        setBotsLocal(mapped);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [setBotsLocal]);
 
+  // poll running bots every 5s
   useEffect(() => {
     const interval = setInterval(async () => {
       const running = botsRef.current.filter((b) => b.status === "running");
@@ -468,22 +450,29 @@ export default function ProjectsPage() {
           const c = changes.find((x) => x.id === b.id);
           return c ? { ...b, status: c.status } : b;
         });
-        update(next);
+        setBotsLocal(next);
       }
     }, 5000);
     return () => clearInterval(interval);
-  }, [update]);
+  }, [setBotsLocal]);
 
-  const handleAdd = (name: string, clientId: string) => {
-    const bot: BotProject = {
-      id: crypto.randomUUID(),
-      name,
-      clientId,
-      status: "stopped",
-      createdAt: new Date().toISOString(),
-      code: DEFAULT_BOT_CODE,
-    };
-    update([bot, ...botsRef.current]);
+  const handleAdd = async (name: string, clientId: string) => {
+    try {
+      const row = await apiFetch("/api/db/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, clientId }),
+      });
+      const bot: BotProject = {
+        id: row.id,
+        name: row.name,
+        clientId: row.client_id,
+        status: row.status as BotStatus,
+        createdAt: row.created_at,
+        code: "",
+      };
+      setBotsLocal([bot, ...botsRef.current]);
+    } catch {}
   };
 
   const handleStart = async (id: string) => {
@@ -491,9 +480,9 @@ export default function ProjectsPage() {
     try {
       const res = await fetch(`/api/hosting/${id}/start`, { method: "POST" });
       const status: BotStatus = res.ok ? "running" : "error";
-      update(botsRef.current.map((b) => (b.id === id ? { ...b, status } : b)));
+      setBotsLocal(botsRef.current.map((b) => (b.id === id ? { ...b, status } : b)));
     } catch {
-      update(botsRef.current.map((b) => (b.id === id ? { ...b, status: "error" } : b)));
+      setBotsLocal(botsRef.current.map((b) => (b.id === id ? { ...b, status: "error" } : b)));
     } finally {
       setAction(id, "idle");
     }
@@ -504,7 +493,7 @@ export default function ProjectsPage() {
     try {
       const res = await fetch(`/api/hosting/${id}/stop`, { method: "POST" });
       if (res.ok) {
-        update(botsRef.current.map((b) => (b.id === id ? { ...b, status: "stopped" } : b)));
+        setBotsLocal(botsRef.current.map((b) => (b.id === id ? { ...b, status: "stopped" } : b)));
       }
     } finally {
       setAction(id, "idle");
@@ -523,9 +512,12 @@ export default function ProjectsPage() {
   const handleDelete = async (id: string) => {
     setAction(id, "deleting");
     try {
-      await fetch(`/api/hosting/${id}`, { method: "DELETE" });
+      await Promise.all([
+        fetch(`/api/hosting/${id}`, { method: "DELETE" }),
+        fetch(`/api/db/projects/${id}`, { method: "DELETE" }),
+      ]);
     } finally {
-      update(botsRef.current.filter((b) => b.id !== id));
+      setBotsLocal(botsRef.current.filter((b) => b.id !== id));
       setAction(id, "idle");
     }
   };
@@ -573,7 +565,11 @@ export default function ProjectsPage() {
           )}
         </div>
 
-        {bots.length === 0 ? (
+        {loading ? (
+          <div className="rounded-xl border border-border bg-card/40 px-8 py-14 flex items-center justify-center">
+            <RotateCcw className="size-5 text-muted-foreground animate-spin" />
+          </div>
+        ) : bots.length === 0 ? (
           <div className="rounded-xl border border-dashed border-border bg-card/40 px-8 py-14 flex flex-col items-center text-center gap-5">
             <div className="size-14 rounded-full bg-muted flex items-center justify-center">
               <Server className="size-6 text-muted-foreground" />

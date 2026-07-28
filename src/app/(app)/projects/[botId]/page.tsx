@@ -29,15 +29,17 @@ interface BotProject {
 
 type Tab = "overview" | "storage" | "packages" | "env" | "database" | "logs" | "settings";
 
-// ── Storage helpers ───────────────────────────────────────────────────────────
-const STORAGE_KEY = "cogsforge:bots";
-function loadBots(): BotProject[] {
-  if (typeof window === "undefined") return [];
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]"); }
-  catch { return []; }
+// ── DB helpers ────────────────────────────────────────────────────────────────
+async function dbGet(path: string) {
+  const res = await fetch(path);
+  if (!res.ok) return null;
+  return res.json();
 }
-function saveBots(bots: BotProject[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(bots));
+async function dbPut(path: string, body: unknown) {
+  await fetch(path, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+}
+async function dbDelete(path: string) {
+  await fetch(path, { method: "DELETE" });
 }
 
 // ── Supabase connection type ──────────────────────────────────────────────────
@@ -101,26 +103,20 @@ function UsageSection({ botId }: { botId: string }) {
   const [metrics, setMetrics] = useState({ storageBytes: 0, storageFiles: 0, packages: 0, envVars: 0 });
 
   useEffect(() => {
-    let storageBytes = 0, storageFiles = 0, packages = 0;
-    try {
-      const bots = JSON.parse(localStorage.getItem("cogsforge:bots") ?? "[]");
-      const bot = bots.find((b: BotProject) => b.id === botId);
-      if (bot?.code) {
-        const files: { name: string; content: string }[] = JSON.parse(bot.code);
-        if (Array.isArray(files)) {
-          storageFiles = files.length;
-          storageBytes = files.reduce((s, f) => s + new TextEncoder().encode(f.content).length, 0);
-          const req = files.find((f) => f.name === "requirements.txt");
-          if (req) packages = parseRequirements(req.content).length;
-        }
+    Promise.all([
+      dbGet(`/api/db/projects/${botId}/files`),
+      dbGet(`/api/db/projects/${botId}/env`),
+    ]).then(([files, env]) => {
+      let storageBytes = 0, storageFiles = 0, packages = 0, envVars = 0;
+      if (Array.isArray(files)) {
+        storageFiles = files.length;
+        storageBytes = files.reduce((s: number, f: { content: string }) => s + new TextEncoder().encode(f.content).length, 0);
+        const req = files.find((f: { name: string }) => f.name === "requirements.txt");
+        if (req) packages = parseRequirements((req as { content: string }).content).length;
       }
-    } catch {}
-
-    let envVars = 0;
-    try { envVars = JSON.parse(localStorage.getItem(`flowwave:env:${botId}`) ?? "[]").length; }
-    catch {}
-
-    setMetrics({ storageBytes, storageFiles, packages, envVars });
+      if (Array.isArray(env)) envVars = env.length;
+      setMetrics({ storageBytes, storageFiles, packages, envVars });
+    }).catch(() => {});
   }, [botId]);
 
   const rows = [
@@ -330,8 +326,11 @@ function SettingsTab({ bot, onUpdate, onDelete }: {
 
   const handleSave = () => {
     const updated = { ...bot, name: name.trim() || bot.name, clientId: clientId.trim() };
-    const bots = loadBots().map((b) => b.id === bot.id ? updated : b);
-    saveBots(bots);
+    fetch(`/api/db/projects/${bot.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: updated.name, client_id: updated.clientId }),
+    });
     onUpdate(updated);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
@@ -416,39 +415,26 @@ function PackagesTab({ botId }: { botId: string }) {
   const [search, setSearch] = useState("");
   const [error, setError] = useState("");
 
-  const getFiles = useCallback((): Array<{ name: string; content: string }> => {
-    try {
-      const bots = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]");
-      const bot = bots.find((b: BotProject) => b.id === botId);
-      if (!bot?.code) return [];
-      const parsed = JSON.parse(bot.code);
-      return Array.isArray(parsed) ? parsed : [];
-    } catch { return []; }
-  }, [botId]);
-
-  const saveFiles = useCallback((files: Array<{ name: string; content: string }>) => {
-    const bots = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]");
-    const updated = bots.map((b: BotProject) =>
-      b.id === botId ? { ...b, code: JSON.stringify(files) } : b
-    );
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-  }, [botId]);
+  const [allFiles, setAllFiles] = useState<Array<{ name: string; content: string }>>([]);
 
   useEffect(() => {
-    const files = getFiles();
-    const req = files.find((f) => f.name === "requirements.txt");
-    setPkgs(req ? parseRequirements(req.content) : []);
-  }, [getFiles]);
+    dbGet(`/api/db/projects/${botId}/files`).then((data) => {
+      const files = Array.isArray(data) ? data : [];
+      setAllFiles(files);
+      const req = files.find((f: { name: string }) => f.name === "requirements.txt");
+      setPkgs(req ? parseRequirements((req as { content: string }).content) : []);
+    }).catch(() => {});
+  }, [botId]);
 
   const persistPkgs = (next: PkgEntry[]) => {
     setPkgs(next);
-    const files = getFiles();
     const reqContent = buildRequirements(next);
-    const hasReq = files.some((f) => f.name === "requirements.txt");
+    const hasReq = allFiles.some((f) => f.name === "requirements.txt");
     const updated = hasReq
-      ? files.map((f) => f.name === "requirements.txt" ? { ...f, content: reqContent } : f)
-      : [...files, { name: "requirements.txt", content: reqContent }];
-    saveFiles(updated);
+      ? allFiles.map((f) => f.name === "requirements.txt" ? { ...f, content: reqContent } : f)
+      : [...allFiles, { name: "requirements.txt", content: reqContent }];
+    setAllFiles(updated);
+    dbPut(`/api/db/projects/${botId}/files`, updated);
   };
 
   const handleAdd = (name = newName, version = newVersion) => {
@@ -589,7 +575,6 @@ function PackagesTab({ botId }: { botId: string }) {
 interface EnvVar { key: string; value: string; hidden: boolean; }
 
 function EnvTab({ botId }: { botId: string }) {
-  const STORE = `flowwave:env:${botId}`;
   const [vars, setVars] = useState<EnvVar[]>([]);
   const [newKey, setNewKey] = useState("");
   const [newVal, setNewVal] = useState("");
@@ -599,13 +584,12 @@ function EnvTab({ botId }: { botId: string }) {
   const [editVal, setEditVal] = useState("");
 
   useEffect(() => {
-    try { setVars(JSON.parse(localStorage.getItem(STORE) ?? "[]")); }
-    catch { setVars([]); }
-  }, [STORE]);
+    dbGet(`/api/db/projects/${botId}/env`).then((data) => { if (Array.isArray(data)) setVars(data); }).catch(() => {});
+  }, [botId]);
 
   const persist = (next: EnvVar[]) => {
     setVars(next);
-    localStorage.setItem(STORE, JSON.stringify(next));
+    dbPut(`/api/db/projects/${botId}/env`, next);
   };
 
   const handleAdd = () => {
@@ -642,7 +626,7 @@ function EnvTab({ botId }: { botId: string }) {
       <div>
         <h3 className="text-sm font-semibold">Environment Variables</h3>
         <p className="text-[12px] text-muted-foreground mt-0.5">
-          Variablen werden lokal gespeichert. Im Editor per <code className="bg-muted px-1 rounded text-[11px]">os.environ[&apos;KEY&apos;]</code> verwenden.
+          Variablen werden in Supabase gespeichert. Im Editor per <code className="bg-muted px-1 rounded text-[11px]">os.environ[&apos;KEY&apos;]</code> verwenden.
         </p>
       </div>
 
@@ -744,7 +728,6 @@ type SupabaseSpec = {
 };
 
 function DatabaseTab({ botId }: { botId: string }) {
-  const CONN_KEY = `flowwave:supabase:${botId}`;
   const [conn, setConn] = useState<SupabaseConn | null>(null);
   const [tables, setTables] = useState<string[]>([]);
   const [columns, setColumns] = useState<Record<string, string[]>>({});
@@ -765,11 +748,8 @@ function DatabaseTab({ botId }: { botId: string }) {
   const PAGE_SIZE = 50;
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(CONN_KEY);
-      if (raw) setConn(JSON.parse(raw));
-    } catch {}
-  }, [CONN_KEY]);
+    dbGet(`/api/db/projects/${botId}/connection`).then((data) => { if (data) setConn(data); }).catch(() => {});
+  }, [botId]);
 
   const headers = useCallback((key: string) => ({
     "apikey": key,
@@ -863,7 +843,7 @@ function DatabaseTab({ botId }: { botId: string }) {
 
   if (!conn) {
     return <ConnectSupabaseForm onConnect={(c) => {
-      localStorage.setItem(CONN_KEY, JSON.stringify(c));
+      dbPut(`/api/db/projects/${botId}/connection`, c);
       setConn(c);
     }} />;
   }
@@ -882,7 +862,7 @@ function DatabaseTab({ botId }: { botId: string }) {
             <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Tabellen</span>
           </div>
           <button
-            onClick={() => { setConn(null); localStorage.removeItem(CONN_KEY); setTables([]); setActiveTable(null); }}
+            onClick={() => { setConn(null); dbDelete(`/api/db/projects/${botId}/connection`); setTables([]); setActiveTable(null); }}
             title="Verbindung trennen"
             className="text-muted-foreground hover:text-destructive"
           >
@@ -1226,9 +1206,6 @@ function SqlEditor({ sql, onSqlChange, onRun, loading, rows, cols, error, hasSer
 
 // ── Storage Tab ───────────────────────────────────────────────────────────────
 function StorageTab({ botId }: { botId: string }) {
-  const BOTS_KEY = "cogsforge:bots";
-  const FOLDERS_KEY = `flowwave:folders:${botId}`;
-
   const [files, setFiles] = useState<{ name: string; content: string }[]>([]);
   const [emptyFolders, setEmptyFolders] = useState<string[]>([]);
   const [currentPath, setCurrentPath] = useState("");
@@ -1240,29 +1217,24 @@ function StorageTab({ botId }: { botId: string }) {
   const [error, setError] = useState("");
 
   const load = useCallback(() => {
-    try {
-      const bots = JSON.parse(localStorage.getItem(BOTS_KEY) ?? "[]");
-      const bot = bots.find((b: BotProject) => b.id === botId);
-      if (bot?.code) {
-        const parsed = JSON.parse(bot.code);
-        setFiles(Array.isArray(parsed) ? parsed : []);
-      } else { setFiles([]); }
-    } catch { setFiles([]); }
-    try { setEmptyFolders(JSON.parse(localStorage.getItem(FOLDERS_KEY) ?? "[]")); }
-    catch { setEmptyFolders([]); }
+    Promise.all([
+      dbGet(`/api/db/projects/${botId}/files`),
+      dbGet(`/api/db/projects/${botId}/folders`),
+    ]).then(([f, fo]) => {
+      setFiles(Array.isArray(f) ? f : []);
+      setEmptyFolders(Array.isArray(fo) ? fo : []);
+    }).catch(() => {});
   }, [botId]);
 
   useEffect(() => { load(); }, [load]);
 
   const saveFiles = (next: { name: string; content: string }[]) => {
-    const bots = JSON.parse(localStorage.getItem(BOTS_KEY) ?? "[]");
-    const updated = bots.map((b: BotProject) => b.id === botId ? { ...b, code: JSON.stringify(next) } : b);
-    localStorage.setItem(BOTS_KEY, JSON.stringify(updated));
+    dbPut(`/api/db/projects/${botId}/files`, next);
     setFiles(next);
   };
 
   const saveFolders = (next: string[]) => {
-    localStorage.setItem(FOLDERS_KEY, JSON.stringify(next));
+    dbPut(`/api/db/projects/${botId}/folders`, next);
     setEmptyFolders(next);
   };
 
@@ -1489,14 +1461,14 @@ export default function ProjectPage({ params }: { params: Promise<{ botId: strin
   const [actionState, setActionState] = useState("idle");
 
   useEffect(() => {
-    const found = loadBots().find((b) => b.id === botId);
-    if (!found) { router.push("/projects"); return; }
-    setBot(found);
+    dbGet(`/api/db/projects/${botId}`).then((data) => {
+      if (!data) { router.push("/projects"); return; }
+      setBot({ id: data.id, name: data.name, clientId: data.client_id, status: data.status, createdAt: data.created_at, code: "" });
+    }).catch(() => router.push("/projects"));
   }, [botId, router]);
 
   const updateBot = (updated: BotProject) => {
     setBot(updated);
-    saveBots(loadBots().map((b) => b.id === updated.id ? updated : b));
   };
 
   const handleStart = async () => {
@@ -1527,9 +1499,12 @@ export default function ProjectPage({ params }: { params: Promise<{ botId: strin
 
   const handleDelete = async () => {
     setActionState("deleting");
-    try { await fetch(`/api/hosting/${botId}`, { method: "DELETE" }); }
-    finally {
-      saveBots(loadBots().filter((b) => b.id !== botId));
+    try {
+      await Promise.all([
+        fetch(`/api/hosting/${botId}`, { method: "DELETE" }),
+        fetch(`/api/db/projects/${botId}`, { method: "DELETE" }),
+      ]);
+    } finally {
       router.push("/projects");
     }
   };

@@ -137,20 +137,20 @@ interface DeployRecord {
   msg: string;
 }
 
-// ── Storage ──────────────────────────────────────────────────────────────────
-const STORAGE_KEY = "cogsforge:bots";
-const foldersKey = (id: string) => `flowwave:folders:${id}`;
-const deploysKey = (id: string) => `flowwave:deploys:${id}`;
-
-function loadBots(): BotProject[] {
-  if (typeof window === "undefined") return [];
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]"); }
-  catch { return []; }
+// ── DB helpers ───────────────────────────────────────────────────────────────
+async function dbGet(path: string) {
+  const res = await fetch(path);
+  if (!res.ok) return null;
+  return res.json();
 }
-
-function saveBot(updated: BotProject) {
-  const bots = loadBots().map((b) => (b.id === updated.id ? updated : b));
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(bots));
+async function dbPut(path: string, body: unknown) {
+  await fetch(path, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+}
+async function dbPost(path: string, body: unknown) {
+  await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+}
+async function dbPatch(path: string, body: unknown) {
+  await fetch(path, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 }
 
 // ── Tree builder ─────────────────────────────────────────────────────────────
@@ -447,24 +447,36 @@ export default function EditorPage({ params }: { params: Promise<{ botId: string
   }, [code, findQuery]);
 
   useEffect(() => {
-    const found = loadBots().find((b) => b.id === botId);
-    if (!found) { router.push("/projects"); return; }
-    setBot(found);
-    const parsed = parseFiles(found.code);
-    setFiles(parsed);
-    try {
-      const saved: string[] = JSON.parse(localStorage.getItem(foldersKey(botId)) ?? "[]");
-      setExtraFolders(saved);
+    Promise.all([
+      dbGet(`/api/db/projects/${botId}`),
+      dbGet(`/api/db/projects/${botId}/files`),
+      dbGet(`/api/db/projects/${botId}/folders`),
+      dbGet(`/api/db/projects/${botId}/deploys`),
+    ]).then(([project, files, folders, deploys]) => {
+      if (!project) { router.push("/projects"); return; }
+      setBot({
+        id: project.id,
+        name: project.name,
+        clientId: project.client_id,
+        status: project.status,
+        createdAt: project.created_at,
+        code: "",
+      });
+      const parsed: FileEntry[] = Array.isArray(files) && files.length > 0
+        ? files
+        : [{ name: "main.py", content: "" }];
+      setFiles(parsed);
+      const savedFolders: string[] = Array.isArray(folders) ? folders : [];
+      setExtraFolders(savedFolders);
       const auto = new Set<string>();
       parsed.forEach((f) => {
         const parts = f.name.split("/");
         for (let i = 1; i < parts.length; i++) auto.add(parts.slice(0, i).join("/"));
       });
-      saved.forEach((fp) => auto.add(fp));
+      savedFolders.forEach((fp) => auto.add(fp));
       setOpenFolders(auto);
-      const hist: DeployRecord[] = JSON.parse(localStorage.getItem(deploysKey(botId)) ?? "[]");
-      setDeployHistory(hist);
-    } catch {}
+      if (Array.isArray(deploys)) setDeployHistory(deploys);
+    }).catch(() => router.push("/projects"));
   }, [botId, router]);
 
   const setCode = useCallback((newCode: string) => {
@@ -475,20 +487,15 @@ export default function EditorPage({ params }: { params: Promise<{ botId: string
 
   const handleSave = useCallback(() => {
     if (!bot) return;
-    const updated = { ...bot, code: JSON.stringify(files) };
-    saveBot(updated);
-    setBot(updated);
-    localStorage.setItem(foldersKey(botId), JSON.stringify(extraFolders));
+    dbPut(`/api/db/projects/${botId}/files`, files);
+    dbPut(`/api/db/projects/${botId}/folders`, extraFolders);
     setSaved(true);
-  }, [bot, files, botId, extraFolders]);
+  }, [bot, botId, files, extraFolders]);
 
   const addDeployRecord = useCallback((ok: boolean, msg: string) => {
     const record: DeployRecord = { ts: Date.now(), ok, msg };
-    setDeployHistory((prev) => {
-      const next = [record, ...prev].slice(0, 10);
-      localStorage.setItem(deploysKey(botId), JSON.stringify(next));
-      return next;
-    });
+    setDeployHistory((prev) => [record, ...prev].slice(0, 10));
+    dbPost(`/api/db/projects/${botId}/deploys`, { ts: record.ts, ok, msg });
   }, [botId]);
 
   const handleDeploy = async () => {
@@ -505,10 +512,7 @@ export default function EditorPage({ params }: { params: Promise<{ botId: string
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail ?? "Deploy fehlgeschlagen.");
       }
-      const bots = loadBots().map((b) =>
-        b.id === bot.id ? { ...b, code: JSON.stringify(files), status: "running" } : b
-      );
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(bots));
+      dbPatch(`/api/db/projects/${botId}`, { status: "running" });
       setBot((prev) => prev ? { ...prev, status: "running" } : prev);
       setDeploySuccess(true);
       addDeployRecord(true, "Bot erfolgreich deployed");
