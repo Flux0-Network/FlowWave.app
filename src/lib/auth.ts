@@ -9,9 +9,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   ],
   callbacks: {
     async session({ session, token }) {
-      if (token.sub) {
-        session.user.id = token.sub;
-      }
+      session.user.id = (token.discordId as string) ?? token.sub ?? "";
       if (token.accessToken) {
         (session as unknown as Record<string, unknown>).accessToken = token.accessToken;
       }
@@ -20,6 +18,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     async jwt({ token, account }) {
       if (account) {
         token.accessToken = account.access_token;
+        token.discordId = account.providerAccountId;
       }
       return token;
     },
