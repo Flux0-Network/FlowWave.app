@@ -304,20 +304,28 @@ function BotCard({
   );
 }
 
-function NewBotDialog({ onAdd }: { onAdd: (name: string, clientId: string) => void }) {
+function NewBotDialog({ onAdd }: { onAdd: (name: string, clientId: string) => Promise<string | null> }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [clientId, setClientId] = useState("");
-  const [errors, setErrors] = useState<{ name?: string }>({});
+  const [errors, setErrors] = useState<{ name?: string; api?: string }>({});
+  const [submitting, setSubmitting] = useState(false);
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     const e: { name?: string } = {};
     if (!name.trim() || name.trim().length < 2) e.name = "Mindestens 2 Zeichen.";
     setErrors(e);
     if (Object.keys(e).length > 0) return;
-    onAdd(name.trim(), clientId.trim());
+    setSubmitting(true);
+    const err = await onAdd(name.trim(), clientId.trim());
+    setSubmitting(false);
+    if (err) {
+      setErrors({ api: "Supabase nicht konfiguriert – bitte URL & Service Role Key in .env.local eintragen und SQL-Migration ausführen." });
+      return;
+    }
     setName("");
     setClientId("");
+    setErrors({});
     setOpen(false);
   };
 
@@ -379,10 +387,17 @@ function NewBotDialog({ onAdd }: { onAdd: (name: string, clientId: string) => vo
           </div>
         </div>
 
+        {errors.api && (
+          <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-[11px] text-destructive">
+            <AlertCircle className="size-3.5 shrink-0 mt-0.5" />
+            <span>{errors.api}</span>
+          </div>
+        )}
+
         <div className="-mx-4 -mb-4 flex items-center justify-end gap-2 rounded-b-xl border-t bg-muted/50 px-4 py-3">
           <DialogClose render={<Button variant="ghost" size="sm">Abbrechen</Button>} />
-          <Button size="sm" className="gap-1.5" onClick={handleSubmit}>
-            <Bot className="size-3.5" />
+          <Button size="sm" className="gap-1.5" onClick={handleSubmit} disabled={submitting}>
+            {submitting ? <RotateCcw className="size-3.5 animate-spin" /> : <Bot className="size-3.5" />}
             Bot hinzufügen
           </Button>
         </div>
@@ -394,6 +409,7 @@ function NewBotDialog({ onAdd }: { onAdd: (name: string, clientId: string) => vo
 export default function ProjectsPage() {
   const [bots, _setBots] = useState<BotProject[]>([]);
   const [loading, setLoading] = useState(true);
+  const [dbError, setDbError] = useState<string | null>(null);
   const [actionStates, setActionStates] = useState<Record<string, string>>({});
   const botsRef = useRef<BotProject[]>([]);
 
@@ -419,7 +435,7 @@ export default function ProjectsPage() {
         }));
         setBotsLocal(mapped);
       })
-      .catch(() => {})
+      .catch((err: Error) => setDbError(err.message))
       .finally(() => setLoading(false));
   }, [setBotsLocal]);
 
@@ -456,7 +472,7 @@ export default function ProjectsPage() {
     return () => clearInterval(interval);
   }, [setBotsLocal]);
 
-  const handleAdd = async (name: string, clientId: string) => {
+  const handleAdd = async (name: string, clientId: string): Promise<string | null> => {
     try {
       const row = await apiFetch("/api/db/projects", {
         method: "POST",
@@ -472,7 +488,10 @@ export default function ProjectsPage() {
         code: "",
       };
       setBotsLocal([bot, ...botsRef.current]);
-    } catch {}
+      return null;
+    } catch (err) {
+      return err instanceof Error ? err.message : "Fehler beim Erstellen";
+    }
   };
 
   const handleStart = async (id: string) => {

@@ -1,15 +1,5 @@
--- FlowWave – full schema (for fresh installs only)
--- If you already ran 001_bots.sql, run 002_extend.sql instead!
-
-CREATE TABLE IF NOT EXISTS public.bots (
-  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id     TEXT NOT NULL,
-  name        TEXT NOT NULL,
-  client_id   TEXT NOT NULL DEFAULT '',
-  status      TEXT NOT NULL DEFAULT 'stopped',
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  uptime      TEXT
-);
+-- FlowWave – extend schema (run AFTER 001_bots.sql)
+-- Adds files, folders, deploys, env vars, and database connections
 
 CREATE TABLE IF NOT EXISTS public.project_files (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -53,7 +43,6 @@ CREATE TABLE IF NOT EXISTS public.project_connections (
   service_key TEXT NOT NULL DEFAULT ''
 );
 
-CREATE INDEX IF NOT EXISTS bots_user_id_idx             ON public.bots(user_id);
-CREATE INDEX IF NOT EXISTS idx_project_files_bot_id     ON public.project_files(bot_id);
-CREATE INDEX IF NOT EXISTS idx_project_deploys_bot_id   ON public.project_deploys(bot_id);
-CREATE INDEX IF NOT EXISTS idx_project_env_vars_bot_id  ON public.project_env_vars(bot_id);
+CREATE INDEX IF NOT EXISTS idx_project_files_bot_id    ON public.project_files(bot_id);
+CREATE INDEX IF NOT EXISTS idx_project_deploys_bot_id  ON public.project_deploys(bot_id);
+CREATE INDEX IF NOT EXISTS idx_project_env_vars_bot_id ON public.project_env_vars(bot_id);

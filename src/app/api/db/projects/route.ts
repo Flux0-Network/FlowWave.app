@@ -28,7 +28,7 @@ export async function GET() {
 
   const sb = createAdminClient();
   const { data, error } = await sb
-    .from("projects")
+    .from("bots")
     .select("*")
     .eq("user_id", session.user.id)
     .order("created_at", { ascending: false });
@@ -42,22 +42,21 @@ export async function POST(req: NextRequest) {
   if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await req.json();
-  const { name, clientId = "", id } = body;
+  const { name, clientId = "" } = body;
   if (!name) return NextResponse.json({ error: "name required" }, { status: 400 });
 
   const sb = createAdminClient();
-  const projectId = id ?? crypto.randomUUID();
 
-  const { data: project, error: projErr } = await sb
-    .from("projects")
-    .insert({ id: projectId, user_id: session.user.id, name, client_id: clientId, status: "stopped" })
+  const { data: bot, error: botErr } = await sb
+    .from("bots")
+    .insert({ user_id: session.user.id, name, client_id: clientId, status: "stopped" })
     .select()
     .single();
 
-  if (projErr) return NextResponse.json({ error: projErr.message }, { status: 500 });
+  if (botErr) return NextResponse.json({ error: botErr.message }, { status: 500 });
 
   // seed default file
-  await sb.from("project_files").insert({ project_id: projectId, name: "main.py", content: DEFAULT_CODE });
+  await sb.from("project_files").insert({ bot_id: bot.id, name: "main.py", content: DEFAULT_CODE });
 
-  return NextResponse.json(project, { status: 201 });
+  return NextResponse.json(bot, { status: 201 });
 }
