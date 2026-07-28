@@ -6,8 +6,8 @@ import Link from "next/link";
 import {
   ArrowLeft, Play, Square, RotateCcw, Rocket, Code2, Terminal,
   Database, Settings, Activity, AlertCircle, CheckCircle2,
-  ChevronRight, Table2, Search, RefreshCw, Plug, Trash2,
-  ChevronLeft, ChevronRight as ChevronRightIcon, X, Eye, EyeOff,
+  ChevronRight, Table2, Search, RefreshCw, Trash2,
+  X, Eye, EyeOff,
   KeyRound, Plus, Copy, Check, Package, PackagePlus, ExternalLink,
   HardDrive, FolderPlus, FolderOpen, FileText,
 } from "lucide-react";
@@ -40,13 +40,6 @@ async function dbPut(path: string, body: unknown) {
 }
 async function dbDelete(path: string) {
   await fetch(path, { method: "DELETE" });
-}
-
-// ── Supabase connection type ──────────────────────────────────────────────────
-interface SupabaseConn {
-  url: string;
-  anonKey: string;
-  serviceKey?: string;
 }
 
 // ── File storage helpers ──────────────────────────────────────────────────────
@@ -721,136 +714,111 @@ function EnvTab({ botId }: { botId: string }) {
 }
 
 // ── Database Tab ──────────────────────────────────────────────────────────────
-type SupabaseTableDef = Record<string, { type: string; description?: string }>;
-type SupabaseSpec = {
-  paths: Record<string, unknown>;
-  definitions: Record<string, { properties?: SupabaseTableDef }>;
-};
+interface UserColumn { name: string; type: string; }
+interface UserTable { id: string; name: string; columns: UserColumn[]; created_at: string; }
+interface UserRow { id: string; data: Record<string, unknown>; created_at: string; }
+
+const COL_TYPES = ["TEXT", "INTEGER", "REAL", "BOOLEAN", "JSON"];
 
 function DatabaseTab({ botId }: { botId: string }) {
-  const [conn, setConn] = useState<SupabaseConn | null>(null);
-  const [tables, setTables] = useState<string[]>([]);
-  const [columns, setColumns] = useState<Record<string, string[]>>({});
-  const [activeTable, setActiveTable] = useState<string | null>(null);
-  const [rows, setRows] = useState<Record<string, unknown>[]>([]);
-  const [rowCols, setRowCols] = useState<string[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [tableSearch, setTableSearch] = useState("");
-  const [rowFilter, setRowFilter] = useState("");
-  const [page, setPage] = useState(0);
-  const [total, setTotal] = useState(0);
-  const [sqlMode, setSqlMode] = useState(false);
-  const [sql, setSql] = useState("SELECT * FROM ");
-  const [sqlRows, setSqlRows] = useState<Record<string, unknown>[]>([]);
-  const [sqlCols, setSqlCols] = useState<string[]>([]);
-  const [sqlError, setSqlError] = useState("");
-  const [sqlLoading, setSqlLoading] = useState(false);
-  const PAGE_SIZE = 50;
+  const [tables, setTables] = useState<UserTable[]>([]);
+  const [activeTable, setActiveTable] = useState<UserTable | null>(null);
+  const [rows, setRows] = useState<UserRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [rowsLoading, setRowsLoading] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
+  const [showAddRow, setShowAddRow] = useState(false);
+  const [newTableName, setNewTableName] = useState("");
+  const [newCols, setNewCols] = useState<UserColumn[]>([{ name: "id", type: "TEXT" }]);
+  const [creating, setCreating] = useState(false);
+  const [rowValues, setRowValues] = useState<Record<string, string>>({});
+  const [addingRow, setAddingRow] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
-  useEffect(() => {
-    dbGet(`/api/db/projects/${botId}/connection`).then((data) => { if (data) setConn(data); }).catch(() => {});
+  const loadTables = useCallback(() => {
+    setLoading(true);
+    dbGet(`/api/db/projects/${botId}/userdb`)
+      .then((data) => { if (Array.isArray(data)) setTables(data); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
   }, [botId]);
 
-  const headers = useCallback((key: string) => ({
-    "apikey": key,
-    "Authorization": `Bearer ${key}`,
-    "Content-Type": "application/json",
-  }), []);
+  useEffect(() => { loadTables(); }, [loadTables]);
 
-  const fetchSchema = useCallback(async (c: SupabaseConn) => {
-    try {
-      const res = await fetch(`${c.url}/rest/v1/`, { headers: headers(c.anonKey) });
-      const spec: SupabaseSpec = await res.json();
-      const tableNames = Object.keys(spec.paths ?? {})
-        .filter((p) => !p.includes("{") && p !== "/")
-        .map((p) => p.replace(/^\//, ""));
-      setTables(tableNames);
-      const cols: Record<string, string[]> = {};
-      for (const t of tableNames) {
-        const def = spec.definitions?.[t];
-        if (def?.properties) cols[t] = Object.keys(def.properties);
-      }
-      setColumns(cols);
-    } catch {}
-  }, [headers]);
+  const loadRows = useCallback((t: UserTable) => {
+    setRowsLoading(true);
+    dbGet(`/api/db/projects/${botId}/userdb/${t.name}/rows`)
+      .then((data) => { if (Array.isArray(data)) setRows(data); })
+      .catch(() => {})
+      .finally(() => setRowsLoading(false));
+  }, [botId]);
 
-  useEffect(() => {
-    if (conn) fetchSchema(conn);
-  }, [conn, fetchSchema]);
-
-  const fetchRows = useCallback(async (table: string, offset = 0, filter = "") => {
-    if (!conn) return;
-    setLoading(true);
-    try {
-      let url = `${conn.url}/rest/v1/${table}?limit=${PAGE_SIZE}&offset=${offset}`;
-      if (filter) url += `&${filter}`;
-      const res = await fetch(url, {
-        headers: { ...headers(conn.anonKey), "Prefer": "count=exact" },
-      });
-      const contentRange = res.headers.get("content-range");
-      if (contentRange) {
-        const match = contentRange.match(/\/(\d+)$/);
-        if (match) setTotal(parseInt(match[1]));
-      }
-      const data = await res.json();
-      if (Array.isArray(data)) {
-        setRows(data);
-        setRowCols(data.length > 0 ? Object.keys(data[0]) : (columns[table] ?? []));
-      } else {
-        setRows([]); setRowCols(columns[table] ?? []);
-      }
-    } catch {} finally { setLoading(false); }
-  }, [conn, columns, headers]);
-
-  const handleTableClick = (t: string) => {
+  const handleSelectTable = (t: UserTable) => {
     setActiveTable(t);
-    setPage(0);
-    setRowFilter("");
-    setSqlMode(false);
-    fetchRows(t, 0);
+    setShowCreate(false);
+    setShowAddRow(false);
+    loadRows(t);
   };
 
-  const handleRunSql = async () => {
-    if (!conn || !sql.trim()) return;
-    const key = conn.serviceKey || conn.anonKey;
-    const tableMatch = sql.match(/from\s+"?(\w+)"?/i);
-    if (!tableMatch) { setSqlError("Kein FROM gefunden. Nur SELECT-Abfragen auf Tabellen werden unterstützt."); return; }
-    const table = tableMatch[1];
-    const selectMatch = sql.match(/select\s+(.*?)\s+from/i);
-    const select = selectMatch ? selectMatch[1].trim() : "*";
-    const whereMatch = sql.match(/where\s+([\s\S]*?)(?:order|limit|offset|$)/i);
-    const limitMatch = sql.match(/limit\s+(\d+)/i);
-    const orderMatch = sql.match(/order\s+by\s+(\w+)(?:\s+(asc|desc))?/i);
-
-    setSqlLoading(true); setSqlError(""); setSqlRows([]); setSqlCols([]);
+  const handleCreateTable = async () => {
+    const name = newTableName.trim().replace(/[^a-z0-9_]/gi, "_");
+    if (!name || newCols.length === 0) return;
+    const validCols = newCols.filter((c) => c.name.trim());
+    if (validCols.length === 0) return;
+    setCreating(true);
     try {
-      let url = `${conn.url}/rest/v1/${table}?select=${select}`;
-      if (whereMatch?.[1]) url += `&${whereMatch[1].trim().replace(/\s*=\s*/g, "=eq.")}`;
-      if (limitMatch) url += `&limit=${limitMatch[1]}`;
-      if (orderMatch) url += `&order=${orderMatch[1]}.${(orderMatch[2] ?? "asc").toLowerCase()}`;
-
-      const res = await fetch(url, { headers: headers(key) });
-      const data = await res.json();
-      if (!res.ok) { setSqlError(JSON.stringify(data)); return; }
-      if (Array.isArray(data)) {
-        setSqlRows(data);
-        setSqlCols(data.length > 0 ? Object.keys(data[0]) : []);
+      const res = await fetch(`/api/db/projects/${botId}/userdb`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, columns: validCols }),
+      });
+      if (res.ok) {
+        setNewTableName(""); setNewCols([{ name: "id", type: "TEXT" }]);
+        setShowCreate(false);
+        loadTables();
       }
-    } catch (e) {
-      setSqlError(String(e));
-    } finally { setSqlLoading(false); }
+    } finally { setCreating(false); }
   };
 
-  if (!conn) {
-    return <ConnectSupabaseForm onConnect={(c) => {
-      dbPut(`/api/db/projects/${botId}/connection`, c);
-      setConn(c);
-    }} />;
-  }
+  const handleDeleteTable = async (tableName: string) => {
+    await fetch(`/api/db/projects/${botId}/userdb/${tableName}`, { method: "DELETE" });
+    setDeleteConfirm(null);
+    if (activeTable?.name === tableName) { setActiveTable(null); setRows([]); }
+    loadTables();
+  };
 
-  const filteredTables = tables.filter((t) =>
-    t.toLowerCase().includes(tableSearch.toLowerCase())
-  );
+  const handleAddRow = async () => {
+    if (!activeTable) return;
+    const data: Record<string, unknown> = {};
+    for (const col of activeTable.columns) {
+      const v = rowValues[col.name] ?? "";
+      if (col.type === "INTEGER") data[col.name] = v === "" ? null : parseInt(v);
+      else if (col.type === "REAL") data[col.name] = v === "" ? null : parseFloat(v);
+      else if (col.type === "BOOLEAN") data[col.name] = v === "true";
+      else if (col.type === "JSON") { try { data[col.name] = JSON.parse(v); } catch { data[col.name] = v; } }
+      else data[col.name] = v;
+    }
+    setAddingRow(true);
+    try {
+      await fetch(`/api/db/projects/${botId}/userdb/${activeTable.name}/rows`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      setRowValues({}); setShowAddRow(false);
+      loadRows(activeTable);
+    } finally { setAddingRow(false); }
+  };
+
+  const handleDeleteRow = async (id: string) => {
+    if (!activeTable) return;
+    await fetch(`/api/db/projects/${botId}/userdb/${activeTable.name}/rows`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    setRows((prev) => prev.filter((r) => r.id !== id));
+  };
 
   return (
     <div className="flex h-[calc(100vh-14rem)] rounded-xl border border-border overflow-hidden">
@@ -862,342 +830,241 @@ function DatabaseTab({ botId }: { botId: string }) {
             <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Tabellen</span>
           </div>
           <button
-            onClick={() => { setConn(null); dbDelete(`/api/db/projects/${botId}/connection`); setTables([]); setActiveTable(null); }}
-            title="Verbindung trennen"
-            className="text-muted-foreground hover:text-destructive"
+            onClick={() => { setShowCreate(true); setActiveTable(null); setShowAddRow(false); }}
+            title="Neue Tabelle"
+            className="text-muted-foreground hover:text-primary transition-colors"
           >
-            <X className="size-3" />
+            <Plus className="size-3.5" />
           </button>
-        </div>
-        <div className="px-2 py-1.5 border-b border-border/60">
-          <div className="relative">
-            <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3 text-muted-foreground" />
-            <input
-              value={tableSearch}
-              onChange={(e) => setTableSearch(e.target.value)}
-              placeholder="Tabelle suchen…"
-              className="w-full pl-6 pr-2 py-1 text-[11px] bg-background border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary/40"
-            />
-          </div>
         </div>
         <div className="flex-1 overflow-y-auto py-1">
-          {filteredTables.length === 0 ? (
-            <p className="text-[11px] text-muted-foreground px-3 py-2">Keine Tabellen gefunden</p>
-          ) : filteredTables.map((t) => (
-            <button
-              key={t}
-              onClick={() => handleTableClick(t)}
-              className={cn(
-                "w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-left transition-colors",
-                activeTable === t
-                  ? "bg-primary/10 text-primary"
-                  : "text-muted-foreground hover:text-foreground hover:bg-accent"
-              )}
-            >
-              <Table2 className="size-3 shrink-0" />
-              <span className="truncate">{t}</span>
-            </button>
+          {loading ? (
+            <div className="flex items-center justify-center py-8">
+              <RefreshCw className="size-4 animate-spin text-muted-foreground" />
+            </div>
+          ) : tables.length === 0 ? (
+            <p className="text-[11px] text-muted-foreground px-3 py-4 text-center">Noch keine Tabellen</p>
+          ) : tables.map((t) => (
+            <div key={t.id} className="group relative">
+              <button
+                onClick={() => handleSelectTable(t)}
+                className={cn(
+                  "w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-left transition-colors pr-8",
+                  activeTable?.id === t.id
+                    ? "bg-primary/10 text-primary"
+                    : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                )}
+              >
+                <Table2 className="size-3 shrink-0" />
+                <span className="truncate">{t.name}</span>
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); setDeleteConfirm(t.name); }}
+                className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-red-400 transition-opacity"
+              >
+                <Trash2 className="size-3" />
+              </button>
+            </div>
           ))}
         </div>
-        <div className="px-2 py-2 border-t border-border/60">
-          <button
-            onClick={() => { setSqlMode(true); setActiveTable(null); }}
-            className={cn(
-              "w-full flex items-center gap-2 px-3 py-1.5 text-[12px] rounded-md transition-colors",
-              sqlMode && !activeTable
-                ? "bg-primary/10 text-primary"
-                : "text-muted-foreground hover:text-foreground hover:bg-accent"
-            )}
+        <div className="px-3 py-2 border-t border-border/60">
+          <Button
+            size="sm"
+            variant="outline"
+            className="w-full h-7 text-[11px] gap-1.5"
+            onClick={() => { setShowCreate(true); setActiveTable(null); setShowAddRow(false); }}
           >
-            <Code2 className="size-3 shrink-0" />
-            SQL Editor
-          </button>
+            <Plus className="size-3" />
+            Neue Tabelle
+          </Button>
         </div>
       </div>
 
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0 bg-background">
-        {!activeTable && !sqlMode ? (
-          <div className="flex-1 flex items-center justify-center text-center">
-            <div className="space-y-2">
-              <Table2 className="size-8 text-muted-foreground/40 mx-auto" />
-              <p className="text-sm text-muted-foreground">Wähle eine Tabelle aus der Sidebar</p>
-              <p className="text-[11px] text-muted-foreground/60">oder öffne den SQL Editor</p>
+        {/* Delete confirm */}
+        {deleteConfirm && (
+          <div className="flex items-center gap-3 px-4 py-3 border-b border-red-500/30 bg-red-500/5 shrink-0">
+            <AlertCircle className="size-4 text-red-400 shrink-0" />
+            <span className="text-[12px] text-red-400 flex-1">Tabelle „{deleteConfirm}" und alle Daten löschen?</span>
+            <Button size="sm" className="h-7 text-[11px] bg-red-500 hover:bg-red-600 text-white" onClick={() => handleDeleteTable(deleteConfirm)}>Löschen</Button>
+            <Button size="sm" variant="ghost" className="h-7 text-[11px]" onClick={() => setDeleteConfirm(null)}>Abbrechen</Button>
+          </div>
+        )}
+
+        {showCreate ? (
+          /* Create table form */
+          <div className="flex-1 overflow-y-auto p-5">
+            <div className="max-w-lg space-y-5">
+              <div>
+                <h3 className="text-sm font-semibold">Neue Tabelle erstellen</h3>
+                <p className="text-[12px] text-muted-foreground mt-0.5">Definiere Spalten und klicke auf Erstellen.</p>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-[12px]">Tabellenname</Label>
+                <Input
+                  value={newTableName}
+                  onChange={(e) => setNewTableName(e.target.value.replace(/[^a-z0-9_]/gi, "_"))}
+                  placeholder="z.B. users"
+                  className="h-8 text-[12px] font-mono"
+                />
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label className="text-[12px]">Spalten</Label>
+                  <Button size="sm" variant="outline" className="h-6 px-2 text-[10px] gap-1"
+                    onClick={() => setNewCols((prev) => [...prev, { name: "", type: "TEXT" }])}>
+                    <Plus className="size-3" />Spalte
+                  </Button>
+                </div>
+                <div className="space-y-2">
+                  {newCols.map((col, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <Input
+                        value={col.name}
+                        onChange={(e) => setNewCols((prev) => prev.map((c, j) => j === i ? { ...c, name: e.target.value } : c))}
+                        placeholder="spaltenname"
+                        className="h-8 text-[12px] font-mono flex-1"
+                      />
+                      <select
+                        value={col.type}
+                        onChange={(e) => setNewCols((prev) => prev.map((c, j) => j === i ? { ...c, type: e.target.value } : c))}
+                        className="h-8 text-[12px] font-mono bg-background border border-border rounded-md px-2 focus:outline-none focus:ring-1 focus:ring-primary/40"
+                      >
+                        {COL_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                      </select>
+                      {newCols.length > 1 && (
+                        <button onClick={() => setNewCols((prev) => prev.filter((_, j) => j !== i))}
+                          className="text-muted-foreground hover:text-red-400 p-1">
+                          <X className="size-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button size="sm" className="h-8 gap-1.5" onClick={handleCreateTable} disabled={creating || !newTableName.trim()}>
+                  {creating ? <RefreshCw className="size-3 animate-spin" /> : <Plus className="size-3" />}
+                  Erstellen
+                </Button>
+                <Button size="sm" variant="ghost" className="h-8" onClick={() => setShowCreate(false)}>Abbrechen</Button>
+              </div>
             </div>
           </div>
-        ) : sqlMode ? (
-          <SqlEditor
-            sql={sql}
-            onSqlChange={setSql}
-            onRun={handleRunSql}
-            loading={sqlLoading}
-            rows={sqlRows}
-            cols={sqlCols}
-            error={sqlError}
-            hasServiceKey={!!conn.serviceKey}
-          />
-        ) : (
-          <TableView
-            table={activeTable!}
-            rows={rows}
-            cols={rowCols}
-            loading={loading}
-            page={page}
-            total={total}
-            pageSize={PAGE_SIZE}
-            onRefresh={() => fetchRows(activeTable!, page * PAGE_SIZE, rowFilter)}
-            onPageChange={(p) => { setPage(p); fetchRows(activeTable!, p * PAGE_SIZE, rowFilter); }}
-          />
-        )}
-      </div>
-    </div>
-  );
-}
+        ) : activeTable ? (
+          /* Table browser */
+          <div className="flex flex-col h-full">
+            <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0">
+              <div className="flex items-center gap-2">
+                <Table2 className="size-3.5 text-muted-foreground" />
+                <span className="text-sm font-semibold">{activeTable.name}</span>
+                <span className="text-[11px] text-muted-foreground">{rows.length} Zeilen</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="ghost" className="h-7 text-[11px] gap-1.5"
+                  onClick={() => loadRows(activeTable)} disabled={rowsLoading}>
+                  <RefreshCw className={cn("size-3", rowsLoading && "animate-spin")} />
+                  Refresh
+                </Button>
+                <Button size="sm" className="h-7 text-[11px] gap-1.5"
+                  onClick={() => { setShowAddRow((v) => !v); setRowValues({}); }}>
+                  <Plus className="size-3" />
+                  Zeile hinzufügen
+                </Button>
+              </div>
+            </div>
 
-function ConnectSupabaseForm({ onConnect }: { onConnect: (c: SupabaseConn) => void }) {
-  const [url, setUrl] = useState("");
-  const [anonKey, setAnonKey] = useState("");
-  const [serviceKey, setServiceKey] = useState("");
-  const [showAnon, setShowAnon] = useState(false);
-  const [showService, setShowService] = useState(false);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
+            {showAddRow && (
+              <div className="px-4 py-3 border-b border-border bg-muted/30 shrink-0">
+                <div className="flex flex-wrap gap-2 items-end">
+                  {activeTable.columns.map((col) => (
+                    <div key={col.name} className="space-y-0.5">
+                      <p className="text-[10px] text-muted-foreground font-medium">{col.name} <span className="text-muted-foreground/50">{col.type}</span></p>
+                      <Input
+                        value={rowValues[col.name] ?? ""}
+                        onChange={(e) => setRowValues((prev) => ({ ...prev, [col.name]: e.target.value }))}
+                        placeholder={col.type === "BOOLEAN" ? "true / false" : col.type}
+                        className="h-7 text-[12px] font-mono w-36"
+                      />
+                    </div>
+                  ))}
+                  <Button size="sm" className="h-7 text-[11px] self-end" onClick={handleAddRow} disabled={addingRow}>
+                    {addingRow ? <RefreshCw className="size-3 animate-spin" /> : "Einfügen"}
+                  </Button>
+                </div>
+              </div>
+            )}
 
-  const handleConnect = async () => {
-    if (!url.trim() || !anonKey.trim()) { setError("URL und Anon Key sind erforderlich."); return; }
-    setLoading(true); setError("");
-    try {
-      const res = await fetch(`${url.replace(/\/$/, "")}/rest/v1/`, {
-        headers: { apikey: anonKey, Authorization: `Bearer ${anonKey}` },
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      onConnect({ url: url.replace(/\/$/, ""), anonKey, serviceKey: serviceKey.trim() || undefined });
-    } catch (e) {
-      setError("Verbindung fehlgeschlagen. Überprüfe URL und Key.");
-    } finally { setLoading(false); }
-  };
-
-  return (
-    <div className="flex items-center justify-center h-full">
-      <div className="w-full max-w-md space-y-5">
-        <div className="flex items-center gap-3 mb-6">
-          <div className="size-10 rounded-xl bg-emerald-500/10 flex items-center justify-center">
-            <Plug className="size-5 text-emerald-400" />
-          </div>
-          <div>
-            <h3 className="font-semibold">Supabase verbinden</h3>
-            <p className="text-[12px] text-muted-foreground">Verbinde dein Supabase-Projekt</p>
-          </div>
-        </div>
-
-        <div className="space-y-1.5">
-          <Label className="text-[12px]">Project URL</Label>
-          <Input
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://xyzcompany.supabase.co"
-            className="h-8 text-[12px] font-mono"
-          />
-        </div>
-
-        <div className="space-y-1.5">
-          <Label className="text-[12px]">Anon Key <span className="text-muted-foreground font-normal">(public)</span></Label>
-          <div className="relative">
-            <Input
-              type={showAnon ? "text" : "password"}
-              value={anonKey}
-              onChange={(e) => setAnonKey(e.target.value)}
-              placeholder="eyJhbGciOiJI…"
-              className="h-8 text-[12px] font-mono pr-8"
-            />
-            <button type="button" onClick={() => setShowAnon(v => !v)} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
-              {showAnon ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
-            </button>
-          </div>
-        </div>
-
-        <div className="space-y-1.5">
-          <Label className="text-[12px]">Service Role Key <span className="text-muted-foreground font-normal">(optional, für SQL Editor)</span></Label>
-          <div className="relative">
-            <Input
-              type={showService ? "text" : "password"}
-              value={serviceKey}
-              onChange={(e) => setServiceKey(e.target.value)}
-              placeholder="eyJhbGciOiJI…"
-              className="h-8 text-[12px] font-mono pr-8"
-            />
-            <button type="button" onClick={() => setShowService(v => !v)} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
-              {showService ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
-            </button>
-          </div>
-        </div>
-
-        {error && (
-          <div className="flex items-center gap-2 text-[11px] text-red-400">
-            <AlertCircle className="size-3.5 shrink-0" />
-            {error}
-          </div>
-        )}
-
-        <Button className="w-full h-8 text-[12px]" onClick={handleConnect} disabled={loading}>
-          {loading ? <><RefreshCw className="size-3 animate-spin mr-1.5" />Verbinde…</> : <><Plug className="size-3 mr-1.5" />Verbinden</>}
-        </Button>
-
-        <p className="text-[10px] text-muted-foreground text-center">
-          Die Keys werden nur lokal in deinem Browser gespeichert.
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function TableView({ table, rows, cols, loading, page, total, pageSize, onRefresh, onPageChange }: {
-  table: string; rows: Record<string, unknown>[]; cols: string[]; loading: boolean;
-  page: number; total: number; pageSize: number;
-  onRefresh: () => void; onPageChange: (p: number) => void;
-}) {
-  const pages = Math.ceil(total / pageSize) || 1;
-
-  return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0">
-        <div className="flex items-center gap-2">
-          <Table2 className="size-3.5 text-muted-foreground" />
-          <span className="text-sm font-semibold">{table}</span>
-          <span className="text-[11px] text-muted-foreground">
-            {total > 0 ? `${total} Zeilen` : ""}
-          </span>
-        </div>
-        <Button size="sm" variant="ghost" className="h-7 text-[11px] gap-1.5" onClick={onRefresh} disabled={loading}>
-          <RefreshCw className={cn("size-3", loading && "animate-spin")} />
-          Refresh
-        </Button>
-      </div>
-
-      <div className="flex-1 overflow-auto">
-        {loading ? (
-          <div className="flex items-center justify-center h-32 text-muted-foreground text-[12px] gap-2">
-            <RefreshCw className="size-3.5 animate-spin" />Lade Daten…
-          </div>
-        ) : rows.length === 0 ? (
-          <div className="flex items-center justify-center h-32 text-muted-foreground text-[12px]">
-            Keine Zeilen in dieser Tabelle
+            <div className="flex-1 overflow-auto">
+              {rowsLoading ? (
+                <div className="flex items-center justify-center h-32 text-muted-foreground text-[12px] gap-2">
+                  <RefreshCw className="size-3.5 animate-spin" />Lade Daten…
+                </div>
+              ) : rows.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-32 gap-2 text-muted-foreground">
+                  <Table2 className="size-6 opacity-30" />
+                  <p className="text-[12px]">Keine Zeilen vorhanden</p>
+                </div>
+              ) : (
+                <table className="w-full text-[12px] border-collapse">
+                  <thead className="sticky top-0 bg-muted/80 backdrop-blur-sm">
+                    <tr>
+                      {activeTable.columns.map((col) => (
+                        <th key={col.name} className="text-left px-3 py-2 font-semibold text-muted-foreground border-b border-border whitespace-nowrap">
+                          {col.name}
+                          <span className="ml-1 text-[9px] font-normal opacity-50">{col.type}</span>
+                        </th>
+                      ))}
+                      <th className="px-3 py-2 border-b border-border w-10" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((row) => (
+                      <tr key={row.id} className="border-b border-border/40 hover:bg-accent/30 group transition-colors">
+                        {activeTable.columns.map((col) => {
+                          const val = row.data[col.name];
+                          const str = val === null || val === undefined ? "" : typeof val === "object" ? JSON.stringify(val) : String(val);
+                          return (
+                            <td key={col.name} className={cn(
+                              "px-3 py-1.5 max-w-[220px] truncate align-top",
+                              val === null || val === undefined ? "text-muted-foreground/40 italic" : "text-foreground/80"
+                            )}>
+                              {str || <span className="italic opacity-40">null</span>}
+                            </td>
+                          );
+                        })}
+                        <td className="px-2 py-1.5 align-top">
+                          <button
+                            onClick={() => handleDeleteRow(row.id)}
+                            className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-red-400 transition-opacity p-0.5"
+                          >
+                            <Trash2 className="size-3" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
           </div>
         ) : (
-          <table className="w-full text-[12px] border-collapse">
-            <thead className="sticky top-0 bg-muted/80 backdrop-blur-sm">
-              <tr>
-                {cols.map((c) => (
-                  <th key={c} className="text-left px-3 py-2 font-semibold text-muted-foreground border-b border-border whitespace-nowrap">
-                    {c}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row, i) => (
-                <tr key={i} className="border-b border-border/40 hover:bg-accent/30 transition-colors">
-                  {cols.map((c) => {
-                    const val = row[c];
-                    const str = val === null ? "null" : val === undefined ? "" : typeof val === "object" ? JSON.stringify(val) : String(val);
-                    return (
-                      <td key={c} className={cn(
-                        "px-3 py-1.5 max-w-[240px] truncate align-top",
-                        val === null ? "text-muted-foreground/50 italic" : "text-foreground/80"
-                      )}>
-                        {str}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      {pages > 1 && (
-        <div className="flex items-center justify-between px-4 py-2 border-t border-border shrink-0 text-[11px]">
-          <span className="text-muted-foreground">
-            Seite {page + 1} von {pages} · {total} Zeilen gesamt
-          </span>
-          <div className="flex items-center gap-1">
-            <Button size="icon" variant="ghost" className="size-6" disabled={page === 0} onClick={() => onPageChange(page - 1)}>
-              <ChevronLeft className="size-3" />
-            </Button>
-            <Button size="icon" variant="ghost" className="size-6" disabled={page >= pages - 1} onClick={() => onPageChange(page + 1)}>
-              <ChevronRightIcon className="size-3" />
+          <div className="flex-1 flex flex-col items-center justify-center gap-4 text-center px-8">
+            <div className="size-14 rounded-full bg-muted flex items-center justify-center">
+              <Database className="size-6 text-muted-foreground/50" />
+            </div>
+            <div className="space-y-1">
+              <p className="font-semibold text-sm">Projektdatenbank</p>
+              <p className="text-[12px] text-muted-foreground max-w-xs">
+                Erstelle Tabellen für dein Projekt — keine externe Verbindung nötig.
+              </p>
+            </div>
+            <Button size="sm" className="gap-1.5" onClick={() => setShowCreate(true)}>
+              <Plus className="size-3.5" />
+              Erste Tabelle erstellen
             </Button>
           </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function SqlEditor({ sql, onSqlChange, onRun, loading, rows, cols, error, hasServiceKey }: {
-  sql: string; onSqlChange: (s: string) => void; onRun: () => void;
-  loading: boolean; rows: Record<string, unknown>[]; cols: string[];
-  error: string; hasServiceKey: boolean;
-}) {
-  return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0">
-        <span className="text-sm font-semibold">SQL Editor</span>
-        <Button size="sm" className="h-7 text-[11px] gap-1.5" onClick={onRun} disabled={loading}>
-          {loading ? <RefreshCw className="size-3 animate-spin" /> : <Play className="size-3" />}
-          Ausführen
-        </Button>
-      </div>
-
-      <div className="p-3 border-b border-border shrink-0">
-        <textarea
-          value={sql}
-          onChange={(e) => onSqlChange(e.target.value)}
-          onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); onRun(); } }}
-          className="w-full h-32 bg-muted/40 border border-border rounded-lg p-3 font-mono text-[12px] leading-[1.6] resize-none focus:outline-none focus:ring-1 focus:ring-primary/40 text-foreground"
-          placeholder="SELECT * FROM table_name LIMIT 50;"
-          spellCheck={false}
-        />
-        <p className="text-[10px] text-muted-foreground mt-1.5">
-          {hasServiceKey ? "⌘+Enter zum Ausführen" : "Hinweis: Nur SELECT-Abfragen auf zugängliche Tabellen. Service Role Key für erweiterte Queries."}
-        </p>
-      </div>
-
-      <div className="flex-1 overflow-auto">
-        {error ? (
-          <div className="m-4 rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-3 text-[12px] font-mono text-red-400">
-            {error}
-          </div>
-        ) : rows.length === 0 && !loading ? (
-          <div className="flex items-center justify-center h-32 text-muted-foreground text-[12px]">
-            Führe eine Abfrage aus um Ergebnisse zu sehen
-          </div>
-        ) : (
-          <table className="w-full text-[12px] border-collapse">
-            <thead className="sticky top-0 bg-muted/80 backdrop-blur-sm">
-              <tr>
-                {cols.map((c) => (
-                  <th key={c} className="text-left px-3 py-2 font-semibold text-muted-foreground border-b border-border whitespace-nowrap">{c}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row, i) => (
-                <tr key={i} className="border-b border-border/40 hover:bg-accent/30">
-                  {cols.map((c) => {
-                    const val = row[c];
-                    const str = val === null ? "null" : typeof val === "object" ? JSON.stringify(val) : String(val);
-                    return (
-                      <td key={c} className={cn("px-3 py-1.5 max-w-[240px] truncate", val === null ? "text-muted-foreground/50 italic" : "text-foreground/80")}>
-                        {str}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
         )}
       </div>
     </div>
