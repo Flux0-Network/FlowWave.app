@@ -423,6 +423,7 @@ export default function EditorPage({ params }: { params: Promise<{ botId: string
   const [deploySuccess, setDeploySuccess] = useState(false);
   const [deployHistory, setDeployHistory] = useState<DeployRecord[]>([]);
   const [showHistory, setShowHistory] = useState(false);
+  const [rootOpen, setRootOpen] = useState(true);
   const [findQuery, setFindQuery] = useState("");
   const [showFind, setShowFind] = useState(false);
   const [findIdx, setFindIdx] = useState(0);
@@ -829,32 +830,39 @@ export default function EditorPage({ params }: { params: Promise<{ botId: string
           </div>
 
           {/* Root folder label */}
-          <div className="flex items-center gap-1 py-[4px] px-2 text-[12px] text-zinc-500 select-none">
-            <ChevronDown className="size-3 shrink-0" />
+          <div
+            className="flex items-center gap-1 py-[4px] px-2 text-[12px] text-zinc-500 hover:text-zinc-300 hover:bg-white/5 cursor-pointer select-none"
+            onClick={() => setRootOpen((v) => !v)}
+          >
+            {rootOpen
+              ? <ChevronDown className="size-3 shrink-0" />
+              : <ChevronRight className="size-3 shrink-0" />}
             <FolderOpen className="size-3.5 shrink-0 text-amber-400/70" />
             <span className="truncate leading-none">{bot.name.toLowerCase().replace(/\s+/g, "-")}</span>
           </div>
 
-          {/* Inline new folder input */}
-          {creatingRootFolder && (
-            <div className="flex items-center gap-1 py-[3px] px-3 ml-4">
-              <FolderOpen className="size-3.5 shrink-0 text-amber-400/50" />
-              <input
-                autoFocus
-                value={newFolderName}
-                onChange={(e) => setNewFolderName(e.target.value)}
-                onBlur={handleNewFolder}
-                onKeyDown={(e) => { if (e.key === "Enter") handleNewFolder(); if (e.key === "Escape") setCreatingRootFolder(false); }}
-                placeholder="Ordnername…"
-                className="flex-1 min-w-0 bg-zinc-800 text-zinc-100 text-[11px] font-mono px-1 rounded outline-none border border-blue-500/60 leading-none"
-              />
-            </div>
-          )}
+          {rootOpen && <>
+            {/* Inline new folder input */}
+            {creatingRootFolder && (
+              <div className="flex items-center gap-1 py-[3px] px-3 ml-4">
+                <FolderOpen className="size-3.5 shrink-0 text-amber-400/50" />
+                <input
+                  autoFocus
+                  value={newFolderName}
+                  onChange={(e) => setNewFolderName(e.target.value)}
+                  onBlur={handleNewFolder}
+                  onKeyDown={(e) => { if (e.key === "Enter") handleNewFolder(); if (e.key === "Escape") setCreatingRootFolder(false); }}
+                  placeholder="Ordnername…"
+                  className="flex-1 min-w-0 bg-zinc-800 text-zinc-100 text-[11px] font-mono px-1 rounded outline-none border border-blue-500/60 leading-none"
+                />
+              </div>
+            )}
 
-          {/* Tree */}
-          <div className="flex-1 overflow-y-auto">
-            {renderTree(tree, 0)}
-          </div>
+            {/* Tree */}
+            <div className="flex-1 overflow-y-auto">
+              {renderTree(tree, 0)}
+            </div>
+          </>}
         </div>
 
         {/* Editor area */}
