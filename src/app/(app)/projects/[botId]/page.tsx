@@ -717,8 +717,231 @@ function EnvTab({ botId }: { botId: string }) {
 interface UserColumn { name: string; type: string; }
 interface UserTable { id: string; name: string; columns: UserColumn[]; created_at: string; }
 interface UserRow { id: string; data: Record<string, unknown>; created_at: string; }
+interface SqlResult { cols: string[]; rows: Record<string, unknown>[]; message?: string; error?: string; }
 
 const COL_TYPES = ["TEXT", "INTEGER", "REAL", "BOOLEAN", "JSON"];
+
+function coerceValue(v: string): unknown {
+  const t = v.trim();
+  if (t === "NULL" || t === "null") return null;
+  if (t === "true" || t === "TRUE") return true;
+  if (t === "false" || t === "FALSE") return false;
+  const n = Number(t);
+  if (!isNaN(n) && t !== "") return n;
+  return t;
+}
+
+function parseValues(valStr: string): unknown[] {
+  const values: unknown[] = [];
+  let cur = "", inQuote = false;
+  for (const ch of valStr) {
+    if (ch === "'" && !inQuote) { inQuote = true; continue; }
+    if (ch === "'" && inQuote) { inQuote = false; continue; }
+    if (ch === "," && !inQuote) { values.push(coerceValue(cur)); cur = ""; }
+    else cur += ch;
+  }
+  if (cur.trim() || !inQuote) values.push(coerceValue(cur));
+  return values;
+}
+
+async function executeSQL(botId: string, sql: string): Promise<SqlResult> {
+  const stmt = sql.trim().replace(/;+\s*$/, "").trim();
+  const upper = stmt.toUpperCase();
+
+  if (upper.startsWith("CREATE TABLE")) {
+    const m = stmt.match(/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s*\(([\s\S]+)\)$/i);
+    if (!m) return { cols: [], rows: [], error: "Ungültige CREATE TABLE Syntax. Erwartet: CREATE TABLE name (col1 TYPE, col2 TYPE)" };
+    const name = m[1];
+    const columns = m[2].split(",").map(c => {
+      const p = c.trim().match(/^(\w+)\s+(\w+)/);
+      return p ? { name: p[1], type: p[2].toUpperCase() } : null;
+    }).filter(Boolean) as UserColumn[];
+    if (columns.length === 0) return { cols: [], rows: [], error: "Mindestens eine Spalte erforderlich" };
+    const res = await fetch(`/api/db/projects/${botId}/userdb`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, columns }),
+    });
+    if (!res.ok) { const e = await res.json(); return { cols: [], rows: [], error: e.error ?? "Fehler beim Erstellen" }; }
+    return { cols: [], rows: [], message: `Tabelle "${name}" erstellt (${columns.length} Spalten)` };
+  }
+
+  if (upper.startsWith("DROP TABLE")) {
+    const m = stmt.match(/DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(\w+)/i);
+    if (!m) return { cols: [], rows: [], error: "Ungültige DROP TABLE Syntax" };
+    await fetch(`/api/db/projects/${botId}/userdb/${m[1]}`, { method: "DELETE" });
+    return { cols: [], rows: [], message: `Tabelle "${m[1]}" gelöscht` };
+  }
+
+  if (upper.startsWith("INSERT INTO")) {
+    const m = stmt.match(/INSERT\s+INTO\s+(\w+)\s*\(([^)]+)\)\s*VALUES\s*\((.+)\)$/i);
+    if (!m) return { cols: [], rows: [], error: "Erwartet: INSERT INTO tabelle (col1, col2) VALUES (val1, val2)" };
+    const colNames = m[2].split(",").map(c => c.trim());
+    const vals = parseValues(m[3]);
+    const data: Record<string, unknown> = {};
+    colNames.forEach((c, i) => { data[c] = vals[i] ?? null; });
+    const res = await fetch(`/api/db/projects/${botId}/userdb/${m[1]}/rows`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data),
+    });
+    if (!res.ok) { const e = await res.json(); return { cols: [], rows: [], error: e.error ?? "Fehler beim Einfügen" }; }
+    return { cols: [], rows: [], message: "1 Zeile eingefügt" };
+  }
+
+  if (upper.startsWith("SELECT")) {
+    const m = stmt.match(/SELECT\s+(.+?)\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+?))?(?:\s+LIMIT\s+(\d+))?\s*$/i);
+    if (!m) return { cols: [], rows: [], error: "Ungültige SELECT Syntax" };
+    const selectCols = m[1].trim(), table = m[2];
+    const allRows = await dbGet(`/api/db/projects/${botId}/userdb/${table}/rows`) as UserRow[] | null;
+    if (!Array.isArray(allRows)) return { cols: [], rows: [], error: `Tabelle "${table}" nicht gefunden` };
+
+    let filtered: UserRow[] = allRows;
+    if (m[3]) {
+      const wm = m[3].trim().match(/(\w+)\s*=\s*'?([^']+?)'?\s*$/);
+      if (wm) {
+        filtered = filtered.filter(r => {
+          const full = { id: r.id, ...r.data, created_at: r.created_at } as Record<string, unknown>;
+          return String(full[wm[1]] ?? "") === wm[2];
+        });
+      }
+    }
+    if (m[4]) filtered = filtered.slice(0, parseInt(m[4]));
+
+    const expanded = filtered.map(r => ({ id: r.id, ...r.data, created_at: r.created_at } as Record<string, unknown>));
+    const allCols = expanded.length > 0 ? Object.keys(expanded[0]) : [];
+    const cols = selectCols === "*" ? allCols : selectCols.split(",").map(c => c.trim());
+    const rows = expanded.map(r => Object.fromEntries(cols.map(c => [c, r[c] ?? null])));
+    return { cols, rows };
+  }
+
+  if (upper.startsWith("DELETE FROM")) {
+    const m = stmt.match(/DELETE\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+?))?\s*$/i);
+    if (!m) return { cols: [], rows: [], error: "Ungültige DELETE Syntax" };
+    if (!m[2]) return { cols: [], rows: [], error: "DELETE ohne WHERE nicht erlaubt. Nutze DROP TABLE um alle Daten zu löschen." };
+    const allRows = await dbGet(`/api/db/projects/${botId}/userdb/${m[1]}/rows`) as UserRow[] | null;
+    if (!Array.isArray(allRows)) return { cols: [], rows: [], error: `Tabelle "${m[1]}" nicht gefunden` };
+    const wm = m[2].trim().match(/(\w+)\s*=\s*'?([^']+?)'?\s*$/);
+    if (!wm) return { cols: [], rows: [], error: "Ungültige WHERE Klausel. Erwartet: col = 'wert'" };
+    const toDelete = wm[1] === "id"
+      ? allRows.filter(r => r.id === wm[2])
+      : allRows.filter(r => String(r.data[wm[1]] ?? "") === wm[2]);
+    for (const row of toDelete) {
+      await fetch(`/api/db/projects/${botId}/userdb/${m[1]}/rows`, {
+        method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: row.id }),
+      });
+    }
+    return { cols: [], rows: [], message: `${toDelete.length} Zeile(n) gelöscht` };
+  }
+
+  return { cols: [], rows: [], error: "Nicht unterstützt. Verfügbare Befehle: SELECT, INSERT INTO, DELETE FROM, CREATE TABLE, DROP TABLE" };
+}
+
+function SqlEditorPanel({ botId, onRefresh }: { botId: string; onRefresh: () => void }) {
+  const [sql, setSql] = useState("SELECT * FROM ");
+  const [result, setResult] = useState<SqlResult | null>(null);
+  const [running, setRunning] = useState(false);
+
+  const run = async () => {
+    if (!sql.trim()) return;
+    setRunning(true);
+    try {
+      const res = await executeSQL(botId, sql);
+      setResult(res);
+      if (!res.error) onRefresh();
+    } finally { setRunning(false); }
+  };
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0">
+        <div className="flex items-center gap-2">
+          <Terminal className="size-3.5 text-muted-foreground" />
+          <span className="text-sm font-semibold">SQL Editor</span>
+        </div>
+        <Button size="sm" className="h-7 text-[11px] gap-1.5" onClick={run} disabled={running || !sql.trim()}>
+          {running ? <RefreshCw className="size-3 animate-spin" /> : <Play className="size-3" />}
+          Ausführen
+        </Button>
+      </div>
+
+      <div className="p-4 border-b border-border shrink-0">
+        <textarea
+          value={sql}
+          onChange={(e) => setSql(e.target.value)}
+          onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); run(); } }}
+          rows={5}
+          className="w-full bg-muted/40 border border-border rounded-lg p-3 font-mono text-[12px] leading-[1.7] resize-none focus:outline-none focus:ring-1 focus:ring-primary/40 text-foreground"
+          placeholder={"SELECT * FROM users\nSELECT * FROM users WHERE name = 'Alice'\nINSERT INTO users (name, age) VALUES ('Bob', 25)\nDELETE FROM users WHERE id = 'uuid'\nCREATE TABLE orders (id TEXT, user_id TEXT, amount REAL)\nDROP TABLE orders"}
+          spellCheck={false}
+        />
+        <p className="text-[10px] text-muted-foreground mt-1.5">⌘+Enter zum Ausführen</p>
+      </div>
+
+      <div className="flex-1 overflow-auto">
+        {result ? (
+          result.error ? (
+            <div className="m-4 rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-3 flex items-start gap-2">
+              <AlertCircle className="size-3.5 text-red-400 shrink-0 mt-0.5" />
+              <span className="text-[12px] text-red-400 font-mono whitespace-pre-wrap">{result.error}</span>
+            </div>
+          ) : result.message ? (
+            <div className="m-4 rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-4 py-3 flex items-center gap-2">
+              <CheckCircle2 className="size-3.5 text-emerald-400 shrink-0" />
+              <span className="text-[12px] text-emerald-400">{result.message}</span>
+            </div>
+          ) : result.rows.length === 0 ? (
+            <div className="flex items-center justify-center h-32 text-muted-foreground text-[12px]">
+              0 Zeilen zurückgegeben
+            </div>
+          ) : (
+            <>
+              <div className="px-4 py-2 border-b border-border text-[10px] text-muted-foreground">
+                {result.rows.length} Zeile{result.rows.length !== 1 ? "n" : ""} · {result.cols.length} Spalte{result.cols.length !== 1 ? "n" : ""}
+              </div>
+              <table className="w-full text-[12px] border-collapse">
+                <thead className="sticky top-0 bg-muted/80 backdrop-blur-sm">
+                  <tr>
+                    {result.cols.map((c) => (
+                      <th key={c} className="text-left px-3 py-2 font-semibold text-muted-foreground border-b border-border whitespace-nowrap">{c}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.rows.map((row, i) => (
+                    <tr key={i} className="border-b border-border/40 hover:bg-accent/30 transition-colors">
+                      {result.cols.map((c) => {
+                        const val = row[c];
+                        const str = val === null || val === undefined ? "" : typeof val === "object" ? JSON.stringify(val) : String(val);
+                        return (
+                          <td key={c} className={cn("px-3 py-1.5 max-w-[240px] truncate font-mono align-top",
+                            val === null || val === undefined ? "text-muted-foreground/40 italic" : "text-foreground/80")}>
+                            {str || <span className="italic opacity-40">null</span>}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )
+        ) : (
+          <div className="flex flex-col items-center justify-center h-full gap-4 text-center text-muted-foreground px-8">
+            <Terminal className="size-8 opacity-20" />
+            <div className="space-y-1 text-[11px] font-mono opacity-60 text-left">
+              <p className="text-muted-foreground/80 font-sans font-medium not-italic text-[12px] mb-2">Unterstützte SQL-Befehle:</p>
+              <p>SELECT * FROM tablename</p>
+              <p>SELECT col1, col2 FROM t WHERE col1 = &apos;value&apos;</p>
+              <p>SELECT * FROM t LIMIT 50</p>
+              <p>INSERT INTO t (col1, col2) VALUES (&apos;a&apos;, 123)</p>
+              <p>DELETE FROM t WHERE id = &apos;uuid&apos;</p>
+              <p>CREATE TABLE t (id TEXT, name TEXT, age INTEGER)</p>
+              <p>DROP TABLE tablename</p>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function DatabaseTab({ botId }: { botId: string }) {
   const [tables, setTables] = useState<UserTable[]>([]);
@@ -734,6 +957,7 @@ function DatabaseTab({ botId }: { botId: string }) {
   const [rowValues, setRowValues] = useState<Record<string, string>>({});
   const [addingRow, setAddingRow] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [dbView, setDbView] = useState<"browser" | "sql">("browser");
 
   const loadTables = useCallback(() => {
     setLoading(true);
@@ -821,7 +1045,30 @@ function DatabaseTab({ botId }: { botId: string }) {
   };
 
   return (
-    <div className="flex h-[calc(100vh-14rem)] rounded-xl border border-border overflow-hidden">
+    <div className="space-y-2">
+      <div className="flex items-center gap-1 rounded-lg bg-muted p-1 w-fit">
+        <button
+          onClick={() => setDbView("browser")}
+          className={cn("flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium rounded-md transition-colors",
+            dbView === "browser" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}
+        >
+          <Table2 className="size-3.5" />Tabellen
+        </button>
+        <button
+          onClick={() => setDbView("sql")}
+          className={cn("flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium rounded-md transition-colors",
+            dbView === "sql" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}
+        >
+          <Terminal className="size-3.5" />SQL Editor
+        </button>
+      </div>
+
+      {dbView === "sql" ? (
+        <div className="h-[calc(100vh-17rem)] rounded-xl border border-border overflow-hidden">
+          <SqlEditorPanel botId={botId} onRefresh={loadTables} />
+        </div>
+      ) : (
+      <div className="flex h-[calc(100vh-17rem)] rounded-xl border border-border overflow-hidden">
       {/* Sidebar */}
       <div className="w-52 shrink-0 border-r border-border bg-card/40 flex flex-col">
         <div className="px-3 py-2.5 border-b border-border/60 flex items-center justify-between">
@@ -1067,6 +1314,8 @@ function DatabaseTab({ botId }: { botId: string }) {
           </div>
         )}
       </div>
+      </div>
+      )}
     </div>
   );
 }
