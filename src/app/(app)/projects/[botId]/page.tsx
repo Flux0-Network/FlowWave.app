@@ -255,52 +255,116 @@ function OverviewTab({ bot, onStart, onStop, onRestart, actionState }: {
 }
 
 // ── Logs Tab ──────────────────────────────────────────────────────────────────
-function LogsTab({ botId }: { botId: string }) {
+function logLineColor(line: string): string {
+  const u = line.toUpperCase();
+  if (u.includes("TRACEBACK") || u.includes("ERROR") || u.includes("EXCEPTION") || u.includes("CRITICAL") || u.includes("FATAL")) return "text-red-400";
+  if (u.includes("WARN")) return "text-yellow-400";
+  if (u.includes("SUCCESS") || u.includes("READY") || u.includes("LOGGED IN") || u.includes("CONNECTED")) return "text-emerald-400";
+  if (u.includes("INFO")) return "text-blue-400";
+  if (u.includes("DEBUG")) return "text-zinc-500";
+  return "text-zinc-300";
+}
+
+function LogsTab({ botId, status, lastStartTime }: { botId: string; status: BotStatus; lastStartTime: number | null }) {
   const [lines, setLines] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
+  const [startupPhase, setStartupPhase] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  const fetchLogs = useCallback(async () => {
+  const fetchLogs = useCallback(async (initial = false) => {
+    if (initial) setLoading(true);
     try {
-      const res = await fetch(`/api/hosting/${botId}/logs`);
+      const res = await fetch(`/api/hosting/${botId}/logs?tail=500`);
       if (res.ok) {
         const data = await res.json();
         setLines(data.logs ?? []);
         setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
       }
-    } catch {}
+    } catch {} finally { if (initial) setLoading(false); }
   }, [botId]);
 
   useEffect(() => {
-    setLoading(true);
-    fetchLogs().finally(() => setLoading(false));
-    const iv = setInterval(fetchLogs, 3000);
+    fetchLogs(true);
+    const isRecent = !!(lastStartTime && Date.now() - lastStartTime < 30_000);
+    setStartupPhase(isRecent);
+
+    let iv = setInterval(fetchLogs, isRecent ? 800 : 3000);
+
+    if (isRecent) {
+      const remaining = 30_000 - (Date.now() - lastStartTime!);
+      const t = setTimeout(() => {
+        clearInterval(iv);
+        setStartupPhase(false);
+        iv = setInterval(fetchLogs, 3000);
+      }, remaining);
+      return () => { clearInterval(iv); clearTimeout(t); };
+    }
     return () => clearInterval(iv);
-  }, [fetchLogs]);
+  }, [fetchLogs, lastStartTime]);
 
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-semibold">Live Logs</h3>
-          <p className="text-[11px] text-muted-foreground mt-0.5">Aktualisiert alle 3 Sekunden</p>
+          <h3 className="text-sm font-semibold">Logs</h3>
+          <p className="text-[11px] text-muted-foreground mt-0.5">
+            {startupPhase ? "Startphase — aktualisiert schnell" : "Aktualisiert alle 3 Sekunden"}
+          </p>
         </div>
-        <Button size="sm" variant="outline" className="h-7 text-[11px] gap-1.5" onClick={() => { setLoading(true); fetchLogs().finally(() => setLoading(false)); }}>
+        <Button size="sm" variant="outline" className="h-7 text-[11px] gap-1.5" onClick={() => fetchLogs(true)}>
           <RefreshCw className={cn("size-3", loading && "animate-spin")} />
           Refresh
         </Button>
       </div>
-      <div className="rounded-xl border border-border bg-zinc-950 dark:bg-black/60 p-4 font-mono text-[11px] leading-relaxed min-h-96 max-h-[60vh] overflow-y-auto">
-        {loading && lines.length === 0 ? (
-          <span className="text-zinc-500">Lade Logs…</span>
-        ) : lines.length === 0 ? (
-          <span className="text-zinc-500">Keine Logs verfügbar. Starte den Bot um Logs zu sehen.</span>
-        ) : (
-          lines.map((l, i) => (
-            <div key={i} className="text-zinc-300 whitespace-pre-wrap break-all hover:bg-white/3 px-1 -mx-1 rounded">{l}</div>
-          ))
-        )}
-        <div ref={bottomRef} />
+
+      {startupPhase && status !== "error" && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-blue-500/20 bg-blue-500/5 text-[12px] text-blue-400">
+          <RefreshCw className="size-3 animate-spin shrink-0" />
+          Bot wird gestartet — Logs erscheinen in Kürze…
+        </div>
+      )}
+
+      {status === "error" && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-red-500/30 bg-red-500/5 text-[12px] text-red-400">
+          <AlertCircle className="size-3.5 shrink-0" />
+          Bot ist abgestürzt — Fehler in den Logs unten
+        </div>
+      )}
+
+      <div className="rounded-xl border border-border bg-zinc-950 dark:bg-black/60 overflow-hidden">
+        <div className="flex items-center gap-1.5 px-3 py-2 bg-zinc-900 border-b border-zinc-800">
+          <div className="size-2.5 rounded-full bg-red-500/70" />
+          <div className="size-2.5 rounded-full bg-yellow-500/70" />
+          <div className="size-2.5 rounded-full bg-emerald-500/70" />
+          <span className="ml-2 text-[10px] text-zinc-500 font-mono">bot_{botId.slice(0, 8)}</span>
+          <div className="ml-auto flex items-center gap-2">
+            {startupPhase && <span className="text-[9px] text-blue-400 animate-pulse font-mono">● LIVE</span>}
+            {status === "error" && <span className="text-[9px] text-red-400 font-mono">● CRASHED</span>}
+            {status === "running" && !startupPhase && <span className="text-[9px] text-emerald-400 font-mono">● RUNNING</span>}
+            <span className="text-[9px] text-zinc-600 font-mono">{lines.length} Zeilen</span>
+          </div>
+        </div>
+
+        <div className="p-4 font-mono text-[11px] leading-relaxed min-h-96 max-h-[60vh] overflow-y-auto">
+          {loading && lines.length === 0 ? (
+            <span className="text-zinc-500">Lade Logs…</span>
+          ) : lines.length === 0 ? (
+            <div className="text-zinc-500 space-y-1">
+              <p>$ Keine Ausgabe vorhanden.</p>
+              <p className="text-zinc-600 mt-2">Mögliche Ursachen:</p>
+              <p className="text-zinc-600 pl-2">· Bot ist nicht gestartet oder noch nicht deployed</p>
+              <p className="text-zinc-600 pl-2">· Bot ist sofort abgestürzt (falscher Token?)</p>
+              <p className="text-zinc-600 pl-2">· Hosting-API nicht erreichbar</p>
+            </div>
+          ) : (
+            lines.map((l, i) => (
+              <div key={i} className={cn("whitespace-pre-wrap break-all hover:bg-white/3 px-1 -mx-1 rounded leading-[1.6]", logLineColor(l))}>
+                {l}
+              </div>
+            ))
+          )}
+          <div ref={bottomRef} />
+        </div>
       </div>
     </div>
   );
@@ -1575,6 +1639,7 @@ export default function ProjectPage({ params }: { params: Promise<{ botId: strin
   const [bot, setBot] = useState<BotProject | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
   const [actionState, setActionState] = useState("idle");
+  const [lastStartTime, setLastStartTime] = useState<number | null>(null);
 
   useEffect(() => {
     dbGet(`/api/db/projects/${botId}`).then((data) => {
@@ -1590,6 +1655,8 @@ export default function ProjectPage({ params }: { params: Promise<{ botId: strin
   const handleStart = async () => {
     if (!bot) return;
     setActionState("starting");
+    setTab("logs");
+    setLastStartTime(Date.now());
     try {
       const res = await fetch(`/api/hosting/${botId}/start`, { method: "POST" });
       updateBot({ ...bot, status: res.ok ? "running" : "error" });
@@ -1707,7 +1774,7 @@ export default function ProjectPage({ params }: { params: Promise<{ botId: strin
         {tab === "packages"  && <PackagesTab botId={botId} />}
         {tab === "env"       && <EnvTab botId={botId} />}
         {tab === "database"  && <DatabaseTab botId={botId} />}
-        {tab === "logs"      && <LogsTab botId={botId} />}
+        {tab === "logs"      && <LogsTab botId={botId} status={bot.status} lastStartTime={lastStartTime} />}
         {tab === "settings"  && <SettingsTab bot={bot} onUpdate={updateBot} onDelete={handleDelete} />}
       </div>
     </div>
