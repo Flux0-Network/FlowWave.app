@@ -32,7 +32,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ bo
   if (!await ownsProject(botId, session.user.id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const body = await req.json();
-  const allowed = ["name", "client_id", "status"];
+  const allowed = ["name", "client_id", "status", "github_owner", "github_repo", "github_branch"];
   const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
   for (const k of allowed) if (body[k] !== undefined) patch[k] = body[k];
 

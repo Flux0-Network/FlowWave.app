@@ -10,6 +10,7 @@ import {
   X, Eye, EyeOff,
   KeyRound, Plus, Copy, Check, Package, PackagePlus, ExternalLink,
   HardDrive, FolderPlus, FolderOpen, FileText,
+  Github, GitBranch, Lock, Globe, Unlink, Link2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,9 +26,12 @@ interface BotProject {
   status: BotStatus;
   createdAt: string;
   code: string;
+  githubOwner?: string;
+  githubRepo?: string;
+  githubBranch?: string;
 }
 
-type Tab = "overview" | "storage" | "packages" | "env" | "database" | "logs" | "settings";
+type Tab = "overview" | "storage" | "packages" | "env" | "database" | "logs" | "github" | "settings";
 
 // ── DB helpers ────────────────────────────────────────────────────────────────
 async function dbGet(path: string) {
@@ -366,6 +370,305 @@ function LogsTab({ botId, status, lastStartTime }: { botId: string; status: BotS
           <div ref={bottomRef} />
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── GitHub Tab ────────────────────────────────────────────────────────────────
+type GHAccount = { login: string; avatar_url: string; type: "user" | "org" };
+type GHRepo = { id: number; name: string; full_name: string; private: boolean; default_branch: string };
+type GHBranch = { name: string; protected: boolean };
+
+function GitHubTab({ bot, onUpdate }: { bot: BotProject; onUpdate: (b: BotProject) => void }) {
+  const [connected, setConnected] = useState<boolean | null>(null);
+  const [accounts, setAccounts] = useState<GHAccount[]>([]);
+  const [selectedAccount, setSelectedAccount] = useState<GHAccount | null>(null);
+  const [repos, setRepos] = useState<GHRepo[]>([]);
+  const [branches, setBranches] = useState<GHBranch[]>([]);
+  const [repoSearch, setRepoSearch] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [loadingRepos, setLoadingRepos] = useState(false);
+  const [loadingBranches, setLoadingBranches] = useState(false);
+
+  const linkedRepo = bot.githubOwner && bot.githubRepo
+    ? `${bot.githubOwner}/${bot.githubRepo}`
+    : null;
+
+  useEffect(() => {
+    fetch("/api/github/status").then(r => r.json()).then(d => {
+      setConnected(d.connected);
+      if (d.connected) {
+        fetch("/api/github/orgs").then(r => r.json()).then(accounts => {
+          if (Array.isArray(accounts)) {
+            setAccounts(accounts);
+            setSelectedAccount(accounts[0] ?? null);
+          }
+        }).catch(() => {});
+      }
+    }).catch(() => setConnected(false));
+  }, []);
+
+  useEffect(() => {
+    if (!selectedAccount || !connected) return;
+    setLoadingRepos(true);
+    setRepos([]);
+    setBranches([]);
+    fetch(`/api/github/repos?owner=${selectedAccount.login}&type=${selectedAccount.type}`)
+      .then(r => r.json())
+      .then(d => { if (Array.isArray(d)) setRepos(d); })
+      .catch(() => {})
+      .finally(() => setLoadingRepos(false));
+  }, [selectedAccount, connected]);
+
+  const selectRepo = async (repo: GHRepo) => {
+    setLoadingBranches(true);
+    setBranches([]);
+    const res = await fetch(`/api/github/repos/${repo.full_name.split("/")[0]}/${repo.name}/branches`);
+    const data = await res.json();
+    if (Array.isArray(data)) setBranches(data);
+    setLoadingBranches(false);
+    await saveLink(repo.full_name.split("/")[0], repo.name, repo.default_branch);
+  };
+
+  const selectBranch = async (branch: string) => {
+    if (!bot.githubOwner || !bot.githubRepo) return;
+    await saveLink(bot.githubOwner, bot.githubRepo, branch);
+  };
+
+  const saveLink = async (owner: string, repo: string, branch: string) => {
+    setSaving(true);
+    const res = await fetch(`/api/db/projects/${bot.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ github_owner: owner, github_repo: repo, github_branch: branch }),
+    });
+    if (res.ok) {
+      onUpdate({ ...bot, githubOwner: owner, githubRepo: repo, githubBranch: branch });
+    }
+    setSaving(false);
+  };
+
+  const unlinkRepo = async () => {
+    setSaving(true);
+    const res = await fetch(`/api/db/projects/${bot.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ github_owner: null, github_repo: null, github_branch: null }),
+    });
+    if (res.ok) onUpdate({ ...bot, githubOwner: undefined, githubRepo: undefined, githubBranch: undefined });
+    setSaving(false);
+  };
+
+  const disconnect = async () => {
+    await fetch("/api/github/status", { method: "DELETE" });
+    setConnected(false);
+    setAccounts([]);
+    setRepos([]);
+    setBranches([]);
+  };
+
+  const filteredRepos = repos.filter(r =>
+    r.name.toLowerCase().includes(repoSearch.toLowerCase())
+  );
+
+  if (connected === null) {
+    return (
+      <div className="flex items-center justify-center py-24">
+        <RefreshCw className="size-5 text-muted-foreground animate-spin" />
+      </div>
+    );
+  }
+
+  if (!connected) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 gap-5 text-center">
+        <div className="size-14 rounded-2xl bg-card border border-border flex items-center justify-center">
+          <Github className="size-7 text-muted-foreground" />
+        </div>
+        <div>
+          <p className="font-semibold text-base">GitHub verbinden</p>
+          <p className="text-[13px] text-muted-foreground mt-1 max-w-xs">
+            Verknüpfe deinen GitHub-Account um Repos und Branches auszuwählen.
+          </p>
+        </div>
+        <a href={`/api/auth/github?returnTo=/projects/${bot.id}`}>
+          <button className="flex items-center gap-2 px-4 py-2 rounded-lg bg-foreground text-background text-[13px] font-medium hover:opacity-90 transition-opacity">
+            <Github className="size-4" />
+            Mit GitHub verbinden
+          </button>
+        </a>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Connected badge */}
+      <div className="rounded-xl border border-border bg-card px-5 py-4 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="size-8 rounded-full bg-muted flex items-center justify-center">
+            <Github className="size-4" />
+          </div>
+          <div>
+            <p className="text-[13px] font-medium">GitHub verbunden</p>
+            <p className="text-[11px] text-muted-foreground">OAuth App mit repo + read:org Scope</p>
+          </div>
+        </div>
+        <button
+          onClick={disconnect}
+          className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-red-400 transition-colors"
+        >
+          <Unlink className="size-3.5" />
+          Trennen
+        </button>
+      </div>
+
+      {/* Linked repo summary */}
+      {linkedRepo && (
+        <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 px-5 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Link2 className="size-4 text-emerald-400" />
+            <div>
+              <p className="text-[13px] font-medium text-emerald-400">{linkedRepo}</p>
+              <div className="flex items-center gap-1.5 mt-0.5">
+                <GitBranch className="size-3 text-muted-foreground" />
+                <span className="text-[11px] text-muted-foreground">{bot.githubBranch ?? "main"}</span>
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={unlinkRepo}
+            disabled={saving}
+            className="text-[11px] text-muted-foreground hover:text-red-400 transition-colors"
+          >
+            Entfernen
+          </button>
+        </div>
+      )}
+
+      {/* Account selector */}
+      {accounts.length > 1 && (
+        <div className="rounded-xl border border-border bg-card overflow-hidden">
+          <div className="px-5 py-3 border-b border-border/60">
+            <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Account / Organisation</p>
+          </div>
+          <div className="flex flex-wrap gap-2 p-4">
+            {accounts.map(acc => (
+              <button
+                key={acc.login}
+                onClick={() => setSelectedAccount(acc)}
+                className={cn(
+                  "flex items-center gap-2 px-3 py-1.5 rounded-lg border text-[12px] transition-colors",
+                  selectedAccount?.login === acc.login
+                    ? "border-foreground bg-accent text-foreground"
+                    : "border-border text-muted-foreground hover:text-foreground hover:border-border/80"
+                )}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={acc.avatar_url} alt="" className="size-4 rounded-full" />
+                {acc.login}
+                {acc.type === "org" && <span className="text-[10px] text-muted-foreground">Org</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Repo list */}
+      <div className="rounded-xl border border-border bg-card overflow-hidden">
+        <div className="px-5 py-3 border-b border-border/60 flex items-center gap-3">
+          <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider flex-1">Repository wählen</p>
+          <div className="relative">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3 text-muted-foreground" />
+            <input
+              value={repoSearch}
+              onChange={e => setRepoSearch(e.target.value)}
+              placeholder="Suchen…"
+              className="pl-6 pr-3 py-1 rounded-lg border border-border bg-muted text-[11px] focus:outline-none focus:border-foreground/40 w-40"
+            />
+          </div>
+        </div>
+
+        {loadingRepos ? (
+          <div className="flex items-center justify-center py-10">
+            <RefreshCw className="size-4 text-muted-foreground animate-spin" />
+          </div>
+        ) : filteredRepos.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-12 gap-2">
+            <p className="text-[12px] text-muted-foreground">Keine Repositories gefunden.</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-border/40 max-h-72 overflow-y-auto">
+            {filteredRepos.map(repo => {
+              const isSelected = bot.githubOwner === repo.full_name.split("/")[0] && bot.githubRepo === repo.name;
+              return (
+                <button
+                  key={repo.id}
+                  onClick={() => selectRepo(repo)}
+                  disabled={saving}
+                  className={cn(
+                    "w-full flex items-center gap-3 px-5 py-3 text-left hover:bg-accent/20 transition-colors",
+                    isSelected && "bg-accent/30"
+                  )}
+                >
+                  {repo.private
+                    ? <Lock className="size-3.5 text-muted-foreground shrink-0" />
+                    : <Globe className="size-3.5 text-muted-foreground shrink-0" />
+                  }
+                  <span className="flex-1 text-[12px] text-foreground/80">{repo.name}</span>
+                  {isSelected && <Check className="size-3.5 text-emerald-400 shrink-0" />}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Branch selector — shown after a repo is linked */}
+      {(bot.githubOwner && bot.githubRepo) && (
+        <div className="rounded-xl border border-border bg-card overflow-hidden">
+          <div className="px-5 py-3 border-b border-border/60 flex items-center justify-between">
+            <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Branch</p>
+            {loadingBranches && <RefreshCw className="size-3.5 text-muted-foreground animate-spin" />}
+          </div>
+          {branches.length > 0 ? (
+            <div className="divide-y divide-border/40 max-h-48 overflow-y-auto">
+              {branches.map(b => (
+                <button
+                  key={b.name}
+                  onClick={() => selectBranch(b.name)}
+                  disabled={saving}
+                  className={cn(
+                    "w-full flex items-center gap-3 px-5 py-2.5 text-left hover:bg-accent/20 transition-colors",
+                    bot.githubBranch === b.name && "bg-accent/30"
+                  )}
+                >
+                  <GitBranch className="size-3.5 text-muted-foreground shrink-0" />
+                  <span className="flex-1 text-[12px] text-foreground/80">{b.name}</span>
+                  {bot.githubBranch === b.name && <Check className="size-3.5 text-emerald-400 shrink-0" />}
+                </button>
+              ))}
+            </div>
+          ) : !loadingBranches ? (
+            <div className="flex items-center justify-center py-8">
+              <button
+                onClick={async () => {
+                  if (!bot.githubOwner || !bot.githubRepo) return;
+                  setLoadingBranches(true);
+                  const res = await fetch(`/api/github/repos/${bot.githubOwner}/${bot.githubRepo}/branches`);
+                  const data = await res.json();
+                  if (Array.isArray(data)) setBranches(data);
+                  setLoadingBranches(false);
+                }}
+                className="flex items-center gap-1.5 text-[12px] text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <RefreshCw className="size-3.5" />
+                Branches laden
+              </button>
+            </div>
+          ) : null}
+        </div>
+      )}
     </div>
   );
 }
@@ -1644,7 +1947,7 @@ export default function ProjectPage({ params }: { params: Promise<{ botId: strin
   useEffect(() => {
     dbGet(`/api/db/projects/${botId}`).then((data) => {
       if (!data) { router.push("/projects"); return; }
-      setBot({ id: data.id, name: data.name, clientId: data.client_id, status: data.status, createdAt: data.created_at, code: "" });
+      setBot({ id: data.id, name: data.name, clientId: data.client_id, status: data.status, createdAt: data.created_at, code: "", githubOwner: data.github_owner ?? undefined, githubRepo: data.github_repo ?? undefined, githubBranch: data.github_branch ?? undefined });
     }).catch(() => router.push("/projects"));
   }, [botId, router]);
 
@@ -1701,6 +2004,7 @@ export default function ProjectPage({ params }: { params: Promise<{ botId: strin
     { key: "env",       label: "Environment",   icon: KeyRound     },
     { key: "database",  label: "Datenbank",     icon: Database     },
     { key: "logs",      label: "Logs",          icon: Terminal     },
+    { key: "github",    label: "GitHub",        icon: Github       },
     { key: "settings",  label: "Einstellungen", icon: Settings     },
   ];
 
@@ -1775,6 +2079,7 @@ export default function ProjectPage({ params }: { params: Promise<{ botId: strin
         {tab === "env"       && <EnvTab botId={botId} />}
         {tab === "database"  && <DatabaseTab botId={botId} />}
         {tab === "logs"      && <LogsTab botId={botId} status={bot.status} lastStartTime={lastStartTime} />}
+        {tab === "github"    && <GitHubTab bot={bot} onUpdate={updateBot} />}
         {tab === "settings"  && <SettingsTab bot={bot} onUpdate={updateBot} onDelete={handleDelete} />}
       </div>
     </div>
