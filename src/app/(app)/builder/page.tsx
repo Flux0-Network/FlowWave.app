@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 
 // Components V2 Builder
@@ -13,6 +13,7 @@ import { ShareDialog } from "@/components/builder/share-dialog";
 import { LivePreviewDialog } from "@/components/builder/live-preview-dialog";
 import { generateComponentsV2Code } from "@/lib/codegen/components-v2";
 import type { BuilderComponent, ComponentType } from "@/types/builder";
+import { decodeLayoutState } from "@/lib/layout-state";
 
 // Cog Generator
 import { CommandBuilder } from "@/components/generator/command-builder";
@@ -88,6 +89,30 @@ export default function BuilderPage({ initialMode = "components", embedded = fal
   const [showTemplates,   setShowTemplates]   = useState(false);
   const [showShare,       setShowShare]       = useState(false);
   const [showLivePreview, setShowLivePreview] = useState(false);
+
+  // ── Import per Link (?state=…) oder Event – z. B. aus dem Arrivo-Dashboard ─────────────────────
+  useEffect(() => {
+    const load = (comps: unknown) => {
+      if (!Array.isArray(comps)) return;
+      const next = comps as BuilderComponent[];
+      setMode("components");
+      setComponents(next);
+      setHistory([[], next]);
+      setHistoryIdx(1);
+      setSelectedId(null);
+    };
+    const state = new URLSearchParams(window.location.search).get("state");
+    if (state) {
+      try {
+        load(decodeLayoutState(state));
+      } catch {
+        // ungültiger Link – leeren Builder anzeigen
+      }
+    }
+    const onImport = (ev: Event) => load((ev as CustomEvent).detail);
+    window.addEventListener("flowwave:import", onImport);
+    return () => window.removeEventListener("flowwave:import", onImport);
+  }, []);
 
   const pushHistory = useCallback((next: BuilderComponent[]) => {
     const h = history.slice(0, historyIdx + 1);

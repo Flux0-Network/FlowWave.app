@@ -14,6 +14,7 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Check, Copy, Download, Upload } from "lucide-react";
 import type { BuilderComponent } from "@/types/builder";
+import { encodeLayoutState } from "@/lib/layout-state";
 
 interface ShareDialogProps {
   open: boolean;
@@ -28,7 +29,7 @@ export function ShareDialog({ open, onOpenChange, components }: ShareDialogProps
   const jsonExport = JSON.stringify(components, null, 2);
 
   const shareUrl = typeof window !== "undefined"
-    ? `${window.location.origin}/builder?state=${encodeURIComponent(btoa(JSON.stringify(components)))}`
+    ? `${window.location.origin}/builder?state=${encodeURIComponent(encodeLayoutState(components))}`
     : "";
 
   const handleCopyLink = async () => {
